@@ -3,9 +3,9 @@ import re
 from tqdm import tqdm
 
 class TalkbankDataLoader:
-    def __init__(self, max_utterance_words=150, max_example_words=500, min_overlap_words=100):
+    def __init__(self, max_utterance_words=150, max_history_words=500, min_overlap_words=100):
         self.max_utterance_words = max_utterance_words
-        self.max_example_words = max_example_words
+        self.max_history_words = max_history_words
         self.min_overlap_words = min_overlap_words
         self.corpora_urls = {
             "CABNC": "https://ca.talkbank.org/data/CABNC.zip",
@@ -90,7 +90,7 @@ class TalkbankDataLoader:
             
             # if there is room left in the example append the cleaned utterance to the list.
             # otherwise skip it and end the example here.
-            if total_word_count + clean_utt_word_count <= self.max_example_words:
+            if total_word_count + clean_utt_word_count <= self.max_history_words:
                 cleaned_utts.append(clean_utt)
                 cleaned_utts_word_counts.append(clean_utt_word_count)
                 total_word_count += clean_utt_word_count
