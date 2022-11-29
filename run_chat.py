@@ -1,4 +1,4 @@
-from realtime_chatbot.realtime_agent import RealtimeAgent
+from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing
 from sshkeyboard import listen_keyboard, stop_listening
 from threading import Thread
 from queue import SimpleQueue
@@ -43,7 +43,7 @@ def configure_identities():
 
 def main():
     identities = configure_identities()
-    agent = RealtimeAgent(identities=identities)
+    agent = RealtimeAgentMultiprocessing(identities=identities)
     listener = KeyboardListener()
     user_speaking = None
     print("\n\n>>>Running<<<\n\n")

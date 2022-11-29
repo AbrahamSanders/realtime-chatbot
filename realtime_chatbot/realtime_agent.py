@@ -221,3 +221,51 @@ class RealtimeAgent:
 
     def next_output(self):
         return queue_helpers.join_queue(self.output_queue, delim="")
+
+class RealtimeAgentMultiprocessing:
+    def __init__(self, wait_until_running=True, user_identity="S1", agent_identity="S2", **kwargs):
+        import multiprocessing as mp
+        from ctypes import c_bool
+        ctx = mp.get_context("spawn")
+        self.reset_queue = ctx.SimpleQueue()
+        self.input_queue = ctx.SimpleQueue()
+        self.output_queue = ctx.SimpleQueue()
+        self.running = ctx.Value(c_bool, False)
+        # Needed because these properties should be externally visible.
+        # TODO: Find a better way to do this.
+        self.user_identity = user_identity
+        self.agent_identity = agent_identity
+        kwargs["user_identity"] = user_identity
+        kwargs["agent_identity"] = agent_identity
+
+        self.execute_process = ctx.Process(target=self.execute, daemon=True, kwargs=kwargs)
+        self.execute_process.start()
+
+        if wait_until_running:
+            #TODO: use an Event instead of a loop
+            while not self.is_running():
+                sleep(0.01)
+
+
+    def execute(self, **kwargs):
+        agent = RealtimeAgent(**kwargs)
+        self.running.value = True
+        while True:
+            if not self.reset_queue.empty():
+                self.reset_queue.get()
+                agent.reset()
+            queue_helpers.transfer_queue(self.input_queue, agent.input_queue)
+            queue_helpers.transfer_queue(agent.output_queue, self.output_queue)
+            sleep(0.01)
+
+    def reset(self):
+        self.reset_queue.put(True)
+
+    def queue_input(self, input):
+        self.input_queue.put(input)
+
+    def next_output(self):
+        return queue_helpers.join_queue(self.output_queue, delim="")
+
+    def is_running(self):
+        return self.running.value
