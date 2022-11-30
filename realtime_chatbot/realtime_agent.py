@@ -161,58 +161,62 @@ class RealtimeAgent:
         while True:
             agent_pause_duration = 0.0
             with self.execute_lock:
-                # Check for new input:
-                next_input = queue_helpers.join_queue(self.input_queue)
-                if next_input:
-                    if self.current_speaker != self.user_identity:
-                        self._set_current_speaker(self.user_identity)
-                    self.sequence += f" {next_input}"
-                # If no new input and the user is currently speaking, append an incrementing pause for the user:
-                elif self.current_speaker == self.user_identity:
-                    user_pause = self._incrementing_pause()
-                    self.sequence += user_pause
+                try:
+                    # Check for new input:
+                    next_input = queue_helpers.join_queue(self.input_queue)
+                    if next_input:
+                        if self.current_speaker != self.user_identity:
+                            self._set_current_speaker(self.user_identity)
+                        self.sequence += f" {next_input}"
+                    # If no new input and the user is currently speaking, append an incrementing pause for the user:
+                    elif self.current_speaker == self.user_identity:
+                        user_pause = self._incrementing_pause()
+                        self.sequence += user_pause
 
-                # Predict continuation
-                self._trim_sequence()
-                prediction = ""
-                while not prediction or re.search(self.incomplete_pause_regex, prediction):
-                    stopping_criteria = self.pause_regex if not prediction else self.end_pause_regex
-                    prediction += self._generate(f"{self.sequence}{prediction}", stopping_criteria=stopping_criteria)
-                prediction_lstrip = prediction.lstrip()
-                output = None
+                    # Predict continuation
+                    self._trim_sequence()
+                    prediction = ""
+                    while not prediction or re.search(self.incomplete_pause_regex, prediction):
+                        stopping_criteria = self.pause_regex if not prediction else self.end_pause_regex
+                        prediction += self._generate(f"{self.sequence}{prediction}", stopping_criteria=stopping_criteria)
+                    prediction_lstrip = prediction.lstrip()
+                    output = None
 
-                # If prediction is a turn switch to agent, switch to the agent and output the prediction:
-                if prediction_lstrip.startswith(self.agent_identity):
-                    output = re.search(self.agent_turn_switch_regex, prediction)[0]
-                    self._set_current_speaker(self.agent_identity)
+                    # If prediction is a turn switch to agent, switch to the agent and output the prediction:
+                    if prediction_lstrip.startswith(self.agent_identity):
+                        output = re.search(self.agent_turn_switch_regex, prediction)[0]
+                        self._set_current_speaker(self.agent_identity)
 
-                # If prediction is a turn switch to user and the agent is currently speaking, append and output an 
-                # incrementing pause for the agent:
-                elif self.current_speaker == self.agent_identity and prediction_lstrip.startswith(self.user_identity):
-                    output = self._incrementing_pause()
-                    # since the agent pauses after every execute cycle, the actual pause duration should remain constant
-                    # even though it is incrementing on the sequence.
-                    agent_pause_duration = self.interval
+                    # If prediction is a turn switch to user and the agent is currently speaking, append and output an 
+                    # incrementing pause for the agent:
+                    elif self.current_speaker == self.agent_identity and prediction_lstrip.startswith(self.user_identity):
+                        output = self._incrementing_pause()
+                        # since the agent pauses after every execute cycle, the actual pause duration should remain constant
+                        # even though it is incrementing on the sequence.
+                        agent_pause_duration = self.interval
 
-                # If prediction is not a turn switch and the agent is currently speaking, output the prediction,
-                # otherwise suppress the prediction (output nothing):
-                elif self.current_speaker == self.agent_identity:
-                    output = re.search(self.agent_continue_regex, prediction)[0]
+                    # If prediction is not a turn switch and the agent is currently speaking, output the prediction,
+                    # otherwise suppress the prediction (output nothing):
+                    elif self.current_speaker == self.agent_identity:
+                        output = re.search(self.agent_continue_regex, prediction)[0]
 
-                if output:
-                    # suppress anything that comes after a turn switch prediction (including an incomplete one at the end).
-                    # turn switch predictions must be the first thing in the prediction in order to be processed.
-                    identity_match = re.search(self.any_identity_with_incomplete_regex, output)
-                    if identity_match:
-                        output = output[:identity_match.start()]
-                    self.sequence += output
-                    self.output_queue.put(output)
-                    # if the agent pause duration hasn't been explicitly set, try to locate it in the output.
-                    if not agent_pause_duration > 0.0:
-                        agent_pause = re.search(self.pause_regex, output)
-                        if agent_pause:
-                            agent_pause_duration = self.interval if agent_pause[0] == "(.)" else float(agent_pause[0][1:-1])
-                            agent_pause_duration = min(agent_pause_duration, self.max_agent_pause_duration)
+                    if output:
+                        # suppress anything that comes after a turn switch prediction (including an incomplete one at the end).
+                        # turn switch predictions must be the first thing in the prediction in order to be processed.
+                        identity_match = re.search(self.any_identity_with_incomplete_regex, output)
+                        if identity_match:
+                            output = output[:identity_match.start()]
+                        self.sequence += output
+                        self.output_queue.put(output)
+                        # if the agent pause duration hasn't been explicitly set, try to locate it in the output.
+                        if not agent_pause_duration > 0.0:
+                            agent_pause = re.search(self.pause_regex, output)
+                            if agent_pause:
+                                agent_pause_duration = self.interval if agent_pause[0] == "(.)" else float(agent_pause[0][1:-1])
+                                agent_pause_duration = min(agent_pause_duration, self.max_agent_pause_duration)
+                except:
+                    #TODO: logging here
+                    pass
                 
             sleep(self.interval + agent_pause_duration)
 

@@ -6,14 +6,17 @@ from whisper.audio import SAMPLE_RATE
 from audioop import ratecv
 import time
 from collections import deque
+import uuid
 
 from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing
+from realtime_chatbot.tts_handler import TTSHandlerMultiprocessing
 
 class RealtimeAgentGradioInterface:
     def __init__(self):
+        self.tts_handler = TTSHandlerMultiprocessing()
         self.current_size = 'small.en'
         self.model = whisper.load_model(self.current_size)
-        self.agent = RealtimeAgentMultiprocessing()
+        self.agent = RealtimeAgentMultiprocessing(interval=0.6)
         self.AUTO_DETECT_LANG = "Auto Detect"
 
     def convert_sample_rate(self, data, original_sr, new_sr): 
@@ -30,6 +33,8 @@ class RealtimeAgentGradioInterface:
             self.model = whisper.load_model(self.current_size)
     
         dialogue = state["dialogue"]
+        tts_html = None
+        next_output_audio = None
         if audio is not None:
             audio = self.convert_sample_rate(audio[1], audio[0], SAMPLE_RATE)
             last_n_segs = state["last_n_segs"]
@@ -60,14 +65,43 @@ class RealtimeAgentGradioInterface:
 
             next_output = self.agent.next_output()
             if next_output:
+                self.tts_handler.queue_input(next_output)
                 if state["user_speaking"] is None or state["user_speaking"]:
                     state["user_speaking"] = False
                     if len(dialogue) == 0:
                         dialogue.append(["", ""])
                     dialogue[-1][1] += f"{self.agent.agent_identity}:"
                 dialogue[-1][1] += next_output
+                
+            next_output_audio = self.tts_handler.next_output()
+            if next_output_audio:
+                tts_html = '''
+                    <script type="text/javascript">
+                        var ce = window.parent.document.getElementsByTagName("gradio-app")[0];
+                        var audio = ce.shadowRoot.getElementById("output_audio").querySelector("audio");
+                        var audio_clone = audio.cloneNode();
+                        var ce_parent = ce.parentNode;
+                        ce_parent.appendChild(audio_clone);
 
-        return dialogue, state
+                        if (audio_clone.previousSibling.nodeName !== "AUDIO") {
+                            audio_clone.play();
+                        } else if (audio_clone.previousSibling.paused && audio_clone.previousSibling.previousSibling.nodeName !== "AUDIO") {
+                            ce_parent.removeChild(audio_clone.previousSibling);
+                            audio_clone.play();
+                        } else {
+                            audio_clone.previousSibling.onended = function() {
+                                ce_parent.removeChild(audio_clone.previousSibling);
+                                audio_clone.play();
+                            };
+                        }
+                    </script>
+                '''
+                unique_name = str(uuid.uuid4())[:8]
+                tts_html = f"""
+                    <iframe style="width: 100%; height: 0px" name="{unique_name}" frameborder="0" 
+                        srcdoc='{tts_html}'></iframe>"""
+
+        return dialogue, next_output_audio, tts_html, state
     
     def launch(self):
         title = "Real-time Dialogue Agent"
@@ -89,13 +123,14 @@ class RealtimeAgentGradioInterface:
             lang_dropdown=None
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
+        tts_html = gr.HTML()
 
         state = gr.State({"dialogue": [], "user_speaking": None, "last_n_segs": deque(maxlen=1)})
 
-        gr.Interface(
+        dialogue_interface = gr.Interface(
             fn=self.transcribe,
             inputs=[
-                gr.Audio(source="microphone", type="numpy", streaming=True),
+                gr.Audio(source="microphone", streaming=True),
                 state,
                 model_size,
                 delay_slider,
@@ -105,16 +140,16 @@ class RealtimeAgentGradioInterface:
                 ], 
             outputs=[
                 dialogue_chatbot,
+                gr.Audio(elem_id="output_audio"),
+                tts_html,
                 state
             ],
             live=True,
             allow_flagging='never',
             title=title,
             description=description,
-        ).launch(
-            # enable_queue=True,
-            # debug=True
         )
+        dialogue_interface.launch()
 
 if __name__ == "__main__":
     interface = RealtimeAgentGradioInterface()
