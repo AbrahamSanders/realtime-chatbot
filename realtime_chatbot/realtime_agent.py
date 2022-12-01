@@ -25,7 +25,7 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgent:
     def __init__(self, resources=None, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.5, max_history_words=250, max_agent_pause_duration=10.0, random_state=None,
+                 interval=0.4, max_history_words=250, max_agent_pause_duration=10.0, random_state=None,
                  chain_to_input_queue=None):
         if resources is None:
             resources = RealtimeAgent_Resources()
@@ -250,10 +250,15 @@ class RealtimeAgentMultiprocessing:
         self.execute_process.start()
 
         if wait_until_running:
-            #TODO: use an Event instead of a loop
-            while not self.is_running():
-                sleep(0.01)
+            self.wait_until_running()
 
+    def wait_until_running(self):
+        #TODO: use an Event instead of a loop
+        while not self.is_running():
+            sleep(0.01)
+
+    def is_running(self):
+        return self.running.value
 
     def execute(self, **kwargs):
         agent = RealtimeAgent(**kwargs)
@@ -274,6 +279,3 @@ class RealtimeAgentMultiprocessing:
 
     def next_output(self):
         return queue_helpers.join_queue(self.output_queue, delim="")
-
-    def is_running(self):
-        return self.running.value

@@ -39,9 +39,15 @@ class ASRHandlerMultiprocessing:
         self.execute_process.start()
 
         if wait_until_running:
-            #TODO: use an Event instead of a loop
-            while not self.is_running():
-                sleep(0.01)
+            self.wait_until_running()
+
+    def wait_until_running(self):
+        #TODO: use an Event instead of a loop
+        while not self.is_running():
+            sleep(0.01)
+
+    def is_running(self):
+        return self.running.value
 
     def execute(self, config):
         if config is None:
@@ -102,6 +108,4 @@ class ASRHandlerMultiprocessing:
 
     def next_output(self):
         return queue_helpers.join_queue(self.output_queue)
-
-    def is_running(self):
-        return self.running.value
+        
