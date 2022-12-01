@@ -71,7 +71,8 @@ class TTSHandlerMultiprocessing:
                     sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(tts_device)
                     sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(tts_device)
                     wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
-                    self.output_queue.put((rate, wav.cpu().numpy()))
+                    wav = wav.cpu().numpy()
+                    self.output_queue.put((rate, wav))
             except:
                 #TODO: logging here
                 pass

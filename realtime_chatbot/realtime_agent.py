@@ -25,7 +25,8 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgent:
     def __init__(self, resources=None, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.4, max_history_words=250, max_agent_pause_duration=10.0, random_state=None):
+                 interval=0.5, max_history_words=250, max_agent_pause_duration=10.0, random_state=None,
+                 chain_to_input_queue=None):
         if resources is None:
             resources = RealtimeAgent_Resources()
         self.resources = resources
@@ -52,7 +53,7 @@ class RealtimeAgent:
             "do_sample": True,
             "top_p": 0.95,
             "top_k": 50,
-            "temperature": 1.5,
+            "temperature": 1.2,
             #"num_beams": 2,
             #"early_stopping": True
         }
@@ -68,6 +69,7 @@ class RealtimeAgent:
         
         self.input_queue = SimpleQueue()
         self.output_queue = SimpleQueue()
+        self.chain_to_input_queue = chain_to_input_queue
         self.execute_lock = Lock()
 
         self.reset()
@@ -208,6 +210,8 @@ class RealtimeAgent:
                             output = output[:identity_match.start()]
                         self.sequence += output
                         self.output_queue.put(output)
+                        if self.chain_to_input_queue is not None:
+                            self.chain_to_input_queue.put(output)
                         # if the agent pause duration hasn't been explicitly set, try to locate it in the output.
                         if not agent_pause_duration > 0.0:
                             agent_pause = re.search(self.pause_regex, output)
