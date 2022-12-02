@@ -9,7 +9,7 @@ from .utils import queue_helpers
 from .utils import audio_helpers
 
 class ASRConfig:
-    def __init__(self, model_size = 'medium.en', lang="English", n_context_segs=1, 
+    def __init__(self, model_size = 'small.en', lang="English", n_context_segs=1, 
                  logprob_threshold=-0.4, no_speech_threshold=0.3, buffer_size=3):
         self.model_size = model_size
         self.lang = lang
