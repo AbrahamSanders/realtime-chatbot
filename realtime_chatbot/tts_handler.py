@@ -6,12 +6,12 @@ import torch
 import re
 from typing import Optional
 from time import sleep
-#from datetime import datetime
+from datetime import datetime
 
 from .utils import queue_helpers
 
 class TTSConfig:
-    def __init__(self, buffer_size=3, downsampling_factor=3):
+    def __init__(self, buffer_size=5, downsampling_factor=2):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
 
@@ -23,9 +23,9 @@ class TTSHandlerMultiprocessing:
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
-        self.input_queue = ctx.SimpleQueue()
-        self.output_queue = ctx.SimpleQueue()
         self.config_queue = ctx.SimpleQueue()
+        self.input_queue = ctx.Queue()
+        self.output_queue = ctx.Queue()
         self.running = ctx.Value(c_bool, False)
 
         self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config,))
@@ -79,19 +79,20 @@ class TTSHandlerMultiprocessing:
         tts_generator.vocoder = tts_generator.vocoder.to(tts_device)
         downsample = None
         input_buffer = []
-        #last_output_time = datetime.now()
+        last_output_time = datetime.now()
 
         self.running.value = True
         while True:
             try:
-                if not self.config_queue.empty():
-                    config = self.config_queue.get()
+                new_config = queue_helpers.skip_queue(self.config_queue)
+                if new_config is not None:
+                    config = new_config
 
-                if not self.input_queue.empty():
-                    input_buffer.append(self.input_queue.get())
+                queue_helpers.transfer_queue_to_buffer(self.input_queue, input_buffer)
 
-                #seconds_since_last_output = (datetime.now() - last_output_time).total_seconds()
-                buffer_size = config.buffer_size# if seconds_since_last_output < config.buffer_size else 1
+                seconds_since_last_output = (datetime.now() - last_output_time).total_seconds()
+                buffer_size = config.buffer_size if seconds_since_last_output < config.buffer_size \
+                                                 else config.buffer_size // 2 + 1
                 if len(input_buffer) >= buffer_size:
                     next_input = " ".join(input_buffer)
                     input_buffer.clear()
@@ -103,12 +104,14 @@ class TTSHandlerMultiprocessing:
                         
                         wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
                         new_rate = rate // config.downsampling_factor
-                        if downsample is None or downsample.orig_freq != rate or downsample.new_freq != new_rate:
-                            downsample = Resample(orig_freq=rate, new_freq=new_rate).to(tts_device)
-                        wav = downsample(wav).cpu().numpy()
+                        if new_rate < rate:
+                            if downsample is None or downsample.orig_freq != rate or downsample.new_freq != new_rate:
+                                downsample = Resample(orig_freq=rate, new_freq=new_rate).to(tts_device)
+                            wav = downsample(wav)
+                        wav = wav.cpu().numpy()
                         
                         self.output_queue.put((new_rate, wav))
-                        #last_output_time = datetime.now()
+                        last_output_time = datetime.now()
             except:
                 #TODO: logging here
                 pass

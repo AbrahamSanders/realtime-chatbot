@@ -26,9 +26,9 @@ class ASRHandlerMultiprocessing:
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
-        self.input_queue = ctx.SimpleQueue()
-        self.output_queue = ctx.SimpleQueue()
         self.config_queue = ctx.SimpleQueue()
+        self.input_queue = ctx.Queue()
+        self.output_queue = ctx.Queue()
         self.chain_to_input_queue = chain_to_input_queue
         self.running = ctx.Value(c_bool, False)
 
@@ -64,17 +64,18 @@ class ASRHandlerMultiprocessing:
             try:
                 # If new config available, reconfigure the model and context queue and
                 # replace the old config
-                if not self.config_queue.empty():
-                    new_config = self.config_queue.get()
+                new_config = queue_helpers.skip_queue(self.config_queue)
+                if new_config is not None:
                     if new_config.model_size != config.model_size:
+                        print(f"Loading model {new_config.model_size}...")
                         model = whisper.load_model(new_config.model_size)
                     if new_config.n_context_segs != config.n_context_segs:
                         last_n_segs = deque(maxlen=new_config.n_context_segs)
                     config = new_config
 
                 # If audio input is available, process it and output the resulting text (if any)
-                if not self.input_queue.empty():
-                    input_buffer.append(self.input_queue.get())
+                n_transfered = queue_helpers.transfer_queue_to_buffer(self.input_queue, input_buffer)
+                #print(f"Transfered {n_transfered} audio segments to buffer.")
                 
                 if len(input_buffer) >= config.buffer_size:
                     next_input = (input_buffer[0][0], np.concatenate([buf[1] for buf in input_buffer]))
@@ -90,6 +91,7 @@ class ASRHandlerMultiprocessing:
                         initial_prompt = initial_prompt
                     )
                     transcription_text = transcription['text'].strip()
+                    #print (f"transcribe done: '{transcription_text}'")
                     if len(last_n_segs) == last_n_segs.maxlen:
                         last_n_segs.popleft()
                     last_n_segs.append(transcription_text)

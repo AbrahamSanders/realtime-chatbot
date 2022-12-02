@@ -2,6 +2,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.trainer_utils import set_seed
 import torch
 import re
+import uuid
 from time import sleep
 from datetime import datetime
 
@@ -24,7 +25,7 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.4, max_history_words=250, max_agent_pause_duration=10.0, random_state=None):
+                 interval=0.5, max_history_words=150, max_agent_pause_duration=10.0, random_state=None):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -183,6 +184,7 @@ class RealtimeAgent:
                 self._set_current_speaker(self.config.user_identity)
             self.sequence += f" {next_input}"
             sequence_changed = True
+            #print(f"input on sequence: {next_input}")
 
         output = None
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_end_time).total_seconds()
@@ -240,6 +242,7 @@ class RealtimeAgent:
                     self.agent_pause_duration = min(self.agent_pause_duration, self.config.max_agent_pause_duration)
 
         self.last_cycle_end_time = datetime.now()
+        #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")
         return output, sequence_changed
 
 class RealtimeAgentMultiprocessing:
@@ -249,10 +252,10 @@ class RealtimeAgentMultiprocessing:
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
         self.reset_queue = ctx.SimpleQueue()
-        self.input_queue = ctx.SimpleQueue()
-        self.output_queue = ctx.SimpleQueue()
         self.config_queue = ctx.SimpleQueue()
-        self.sequence_queue = ctx.SimpleQueue()
+        self.input_queue = ctx.Queue()
+        self.output_queue = ctx.Queue()
+        self.sequence_queue = ctx.Queue()
         self.chain_to_input_queue = chain_to_input_queue
         self.output_sequence = output_sequence
         self.output_sequence_max_length = output_sequence_max_length
@@ -278,12 +281,12 @@ class RealtimeAgentMultiprocessing:
         self.running.value = True
         while True:
             try:
-                if not self.config_queue.empty():
-                    config = self.config_queue.get()
+                new_config = queue_helpers.skip_queue(self.config_queue)
+                if new_config is not None:
+                    config = new_config
                     agent.set_config(config)
 
-                if not self.reset_queue.empty():
-                    self.reset_queue.get()
+                if queue_helpers.skip_queue(self.reset_queue) is not None:
                     agent.reset()
 
                 next_input = queue_helpers.join_queue(self.input_queue)
