@@ -6,12 +6,12 @@ import torch
 import re
 from typing import Optional
 from time import sleep
-from datetime import datetime
+#from datetime import datetime
 
 from .utils import queue_helpers
 
 class TTSConfig:
-    def __init__(self, buffer_size=2, downsampling_factor=3):
+    def __init__(self, buffer_size=3, downsampling_factor=3):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
 
@@ -79,7 +79,7 @@ class TTSHandlerMultiprocessing:
         tts_generator.vocoder = tts_generator.vocoder.to(tts_device)
         downsample = None
         input_buffer = []
-        last_output_time = datetime.now()
+        #last_output_time = datetime.now()
 
         self.running.value = True
         while True:
@@ -90,8 +90,8 @@ class TTSHandlerMultiprocessing:
                 if not self.input_queue.empty():
                     input_buffer.append(self.input_queue.get())
 
-                seconds_since_last_output = (datetime.now() - last_output_time).total_seconds()
-                buffer_size = config.buffer_size if seconds_since_last_output < config.buffer_size else 1
+                #seconds_since_last_output = (datetime.now() - last_output_time).total_seconds()
+                buffer_size = config.buffer_size# if seconds_since_last_output < config.buffer_size else 1
                 if len(input_buffer) >= buffer_size:
                     next_input = " ".join(input_buffer)
                     input_buffer.clear()
@@ -108,7 +108,7 @@ class TTSHandlerMultiprocessing:
                         wav = downsample(wav).cpu().numpy()
                         
                         self.output_queue.put((new_rate, wav))
-                        last_output_time = datetime.now()
+                        #last_output_time = datetime.now()
             except:
                 #TODO: logging here
                 pass

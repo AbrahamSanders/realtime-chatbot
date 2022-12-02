@@ -97,7 +97,7 @@ class RealtimeAgentGradioInterface:
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='medium.en')
 
-        tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=2, step=1, label="TTS buffer size")
+        tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=3, step=1, label="TTS buffer size")
         asr_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=3, step=1, label="ASR buffer size")
         asr_logprob_threshold_slider = gr.inputs.Slider(minimum=-3.0, maximum=0.0, default=-0.4, label="ASR Log prob threshold")
         asr_no_speech_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.3, label="ASR No speech threshold")
