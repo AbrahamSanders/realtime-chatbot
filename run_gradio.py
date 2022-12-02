@@ -136,7 +136,7 @@ class RealtimeAgentGradioInterface:
             fn=self.execute,
             inputs=[
                 state,
-                gr.Audio(source="microphone", streaming=True),
+                gr.Audio(source="microphone", streaming=True, label="ASR Input"),
                 tts_buffer_size_slider,
                 asr_buffer_size_slider,
                 asr_model_size,
@@ -153,7 +153,7 @@ class RealtimeAgentGradioInterface:
             outputs=[
                 state,
                 dialogue_chatbot,
-                gr.Audio(elem_id="output_audio"),
+                gr.Audio(elem_id="output_audio", label="TTS Output"),
                 gr.HTML()
             ],
             live=True,
