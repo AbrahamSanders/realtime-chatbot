@@ -1,4 +1,4 @@
-from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing
+from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing, RealtimeAgentConfig
 from sshkeyboard import listen_keyboard, stop_listening
 from threading import Thread
 from queue import SimpleQueue
@@ -35,7 +35,7 @@ def configure_identities():
     for identity, info in identities.items():
         name = input(f"What is {identity}'s name? ")
         age = input(f"How old is {identity}? ")
-        sex = input(f"Is {identity} male or female? ")
+        sex = input(f"What is {identity}'s gender (male, female, unknown)? ")
         info.name = name if name else info.name
         info.age = age if age else info.age
         info.sex = sex if sex else info.sex
@@ -43,7 +43,8 @@ def configure_identities():
 
 def main():
     identities = configure_identities()
-    agent = RealtimeAgentMultiprocessing(identities=identities)
+    config = RealtimeAgentConfig(identities=identities)
+    agent = RealtimeAgentMultiprocessing(config=config)
     listener = KeyboardListener()
     user_speaking = None
     print("\n\n>>>Running<<<\n\n")
@@ -55,13 +56,13 @@ def main():
                 stop_listening()
                 break
             if next_input.endswith("-reset"):
-                agent.reset()
+                agent.queue_reset()
                 print("\n\n>>>Reset<<<\n")
                 continue
             agent.queue_input(next_input)
             if user_speaking is None or not user_speaking:
                 user_speaking = True
-                print(f"\n{agent.user_identity}:", end="", flush=True)
+                print(f"\n{config.user_identity}:", end="", flush=True)
             print(f" {next_input}", end="", flush=True)
 
         # Agent output (if any)
@@ -69,7 +70,7 @@ def main():
         if next_output:
             if user_speaking is None or user_speaking:
                 user_speaking = False
-                print(f"\n{agent.agent_identity}:", end="", flush=True)
+                print(f"\n{config.agent_identity}:", end="", flush=True)
             print(next_output, end="", flush=True)
 
         # Brief sleep to avoid tight loop

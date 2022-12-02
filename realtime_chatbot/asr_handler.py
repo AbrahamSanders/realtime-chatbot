@@ -18,6 +18,9 @@ class ASRConfig:
         self.no_speech_threshold = no_speech_threshold
         self.buffer_size = buffer_size
 
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
 class ASRHandlerMultiprocessing:
     def __init__(self, wait_until_running=True, config=None, chain_to_input_queue=None):
         import multiprocessing as mp
@@ -98,7 +101,7 @@ class ASRHandlerMultiprocessing:
             except:
                 #TODO: logging here
                 pass
-            sleep(0.01)
+            sleep(0.05)
 
     def queue_config(self, config):
         self.config_queue.put(config)

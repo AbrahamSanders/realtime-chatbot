@@ -1,5 +1,6 @@
 from fairseq.checkpoint_utils import load_model_ensemble_and_task_from_hf_hub
 from fairseq.models.text_to_speech.hub_interface import TTSHubInterface
+from torchaudio.transforms import Resample
 import g2p_en
 import torch
 import re
@@ -7,9 +8,15 @@ from typing import Optional
 from time import sleep
 from datetime import datetime
 
+from .utils import queue_helpers
+
 class TTSConfig:
-    def __init__(self, buffer_size=2):
+    def __init__(self, buffer_size=2, downsampling_factor=3):
         self.buffer_size = buffer_size
+        self.downsampling_factor = downsampling_factor
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
 
 class TTSHandlerMultiprocessing:
     def __init__(self, wait_until_running=True, config=None):
@@ -70,6 +77,7 @@ class TTSHandlerMultiprocessing:
         TTSHubInterface.update_cfg_with_data_cfg(cfg, tts_task.data_cfg)
         tts_generator = tts_task.build_generator(models, cfg)
         tts_generator.vocoder = tts_generator.vocoder.to(tts_device)
+        downsample = None
         input_buffer = []
         last_output_time = datetime.now()
 
@@ -92,14 +100,19 @@ class TTSHandlerMultiprocessing:
                         sample = TTSHubInterface.get_model_input(tts_task, next_input)
                         sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(tts_device)
                         sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(tts_device)
+                        
                         wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
-                        wav = wav.cpu().numpy()
-                        self.output_queue.put((rate, wav))
+                        new_rate = rate // config.downsampling_factor
+                        if downsample is None or downsample.orig_freq != rate or downsample.new_freq != new_rate:
+                            downsample = Resample(orig_freq=rate, new_freq=new_rate).to(tts_device)
+                        wav = downsample(wav).cpu().numpy()
+                        
+                        self.output_queue.put((new_rate, wav))
                         last_output_time = datetime.now()
             except:
                 #TODO: logging here
                 pass
-            sleep(0.01)
+            sleep(0.05)
 
     def queue_config(self, config):
         self.config_queue.put(config)
@@ -108,7 +121,5 @@ class TTSHandlerMultiprocessing:
         self.input_queue.put(input)
 
     def next_output(self):
-        if not self.output_queue.empty():
-            return self.output_queue.get()
-        return None
+        return queue_helpers.join_queue_audio(self.output_queue)
         
