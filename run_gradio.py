@@ -135,7 +135,7 @@ class RealtimeAgentGradioInterface:
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
-        reset_button = gr.Checkbox(label="Reset")
+        reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)")
         
         state = gr.State({
             "dialogue": [], 
