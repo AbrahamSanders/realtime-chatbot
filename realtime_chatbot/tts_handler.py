@@ -58,8 +58,8 @@ class TTSHandlerMultiprocessing:
     def sanitize_text_for_tts(self, text):
         text = re.sub(r"\(\d*?\.\d*?\)", "", text)
         text = re.sub("[hx]{2,}", "", text)
-        text = re.sub(r"0 (?=\[%)", "", text)
-        text = re.sub(" 0[.]", "", text)
+        text = re.sub(r"0 ?(?=\[)", "", text)
+        text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
         text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha!", text)
         text = re.sub(" {2,}", " ", text)
