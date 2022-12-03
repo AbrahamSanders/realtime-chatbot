@@ -20,7 +20,7 @@ class RealtimeAgentGradioInterface:
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
             output_sequence=True,
-            #output_sequence_max_length=3000
+            output_sequence_max_length=5000
         )
         self.asr_handler = ASRHandlerMultiprocessing(
             wait_until_running=False,
@@ -52,7 +52,7 @@ class RealtimeAgentGradioInterface:
 
     def execute(self, state, audio, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, 
                 asr_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
-                user_name, user_age, user_sex, agent_name, agent_age, agent_sex):
+                user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
         # queue up configs in case any changes were made.
         asr_config = ASRConfig(model_size=asr_model_size, lang=asr_lang, logprob_threshold=asr_logprob_threshold, 
@@ -69,7 +69,8 @@ class RealtimeAgentGradioInterface:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
 
-        tts_config = TTSConfig(buffer_size=tts_buffer_size, downsampling_factor=tts_downsampling_factor)
+        tts_config = TTSConfig(buffer_size=tts_buffer_size, downsampling_factor=tts_downsampling_factor, 
+                               speaker=agent_voice)
         if tts_config != state["tts_config"]:
             state["tts_config"] = tts_config
             self.tts_handler.queue_config(tts_config)
@@ -137,6 +138,11 @@ class RealtimeAgentGradioInterface:
             choices=[default_identities["S2"].sex, "male", "female"], 
             default=default_identities["S2"].sex, label="Agent Gender"
         )
+        agent_voice_dropdown = gr.inputs.Dropdown(
+            type="index",
+            choices=[f"Voice {i+1}" for i in range(200)],
+            default="Voice 47", label="Agent Voice"
+        )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
         reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)")
@@ -167,7 +173,8 @@ class RealtimeAgentGradioInterface:
                 user_sex_dropdown,
                 agent_name_textbox,
                 agent_age_textbox,
-                agent_sex_dropdown
+                agent_sex_dropdown,
+                agent_voice_dropdown
                 ], 
             outputs=[
                 state,

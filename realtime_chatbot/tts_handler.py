@@ -10,9 +10,10 @@ from datetime import datetime
 from .utils import queue_helpers, audio_helpers
 
 class TTSConfig:
-    def __init__(self, buffer_size=3, downsampling_factor=1):
+    def __init__(self, buffer_size=3, downsampling_factor=1, speaker=0):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
+        self.speaker = speaker
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -77,7 +78,8 @@ class TTSHandlerMultiprocessing:
         self.g2p = g2p_en.G2p()
         TTSHubInterface.phonemize = self.tts_phonemize
         models, cfg, tts_task = load_model_ensemble_and_task_from_hf_hub(
-            "facebook/fastspeech2-en-ljspeech",
+            #"facebook/fastspeech2-en-ljspeech",
+            "facebook/fastspeech2-en-200_speaker-cv4",
             arg_overrides={"vocoder": "hifigan", "fp16": False}
         )
         tts_model = models[0].to(device)
@@ -105,9 +107,11 @@ class TTSHandlerMultiprocessing:
                     input_buffer.clear()
                     next_input = self.sanitize_text_for_tts(next_input)
                     if next_input:
-                        sample = TTSHubInterface.get_model_input(tts_task, next_input)
+                        sample = TTSHubInterface.get_model_input(tts_task, next_input, speaker=config.speaker)
                         sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(device)
                         sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(device)
+                        if sample["speaker"] is not None:
+                            sample["speaker"] = sample["speaker"].to(device)
                         
                         wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
                         new_rate = rate // config.downsampling_factor
