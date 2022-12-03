@@ -20,7 +20,7 @@ class RealtimeAgentGradioInterface:
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
             output_sequence=True,
-            output_sequence_max_length=3000
+            #output_sequence_max_length=3000
         )
         self.asr_handler = ASRHandlerMultiprocessing(
             wait_until_running=False,
