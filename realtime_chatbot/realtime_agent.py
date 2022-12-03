@@ -140,7 +140,7 @@ class RealtimeAgent:
             trimmed_history = " ".join(history_split[i:])
             self.sequence = f"{self.sequence[:self.prefix_length]}{trimmed_history}"
 
-    def _incrementing_pause(self):
+    def _incrementing_pause(self, seconds_since_last_cycle):
         # get previous pause duration (if any)
         pause_match = re.search(self.pause_at_end_regex, self.sequence[-10:])
         if pause_match:
@@ -151,7 +151,7 @@ class RealtimeAgent:
             pause_duration = 0.0
 
         # increment and return
-        pause_duration += self.config.interval
+        pause_duration += seconds_since_last_cycle
         return f" ({pause_duration:.1f})"
         
     def _set_prefix(self):
@@ -199,7 +199,7 @@ class RealtimeAgent:
 
         # If no new input and the user is currently speaking, append an incrementing pause for the user:
         if not next_input and self.current_speaker == self.config.user_identity:
-            user_pause = self._incrementing_pause()
+            user_pause = self._incrementing_pause(seconds_since_last_cycle)
             self.sequence += user_pause
             sequence_changed = True
 
@@ -220,7 +220,7 @@ class RealtimeAgent:
         # If prediction is a turn switch to user and the agent is currently speaking, append and output an 
         # incrementing pause for the agent:
         elif self.current_speaker == self.config.agent_identity and prediction_lstrip.startswith(self.config.user_identity):
-            output = self._incrementing_pause()
+            output = self._incrementing_pause(seconds_since_last_cycle)
             # since the agent pauses after every execute cycle, the actual pause duration should remain constant
             # even though it is incrementing on the sequence.
             self.agent_pause_duration = self.config.interval

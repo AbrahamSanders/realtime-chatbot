@@ -31,7 +31,7 @@ class RealtimeAgentGradioInterface:
         self.agent.wait_until_running()
         self.tts_handler.wait_until_running()
         
-        self.audio_html = gradio_helpers.get_audio_html("output_audio")
+        self.audio_html = gradio_helpers.get_audio_html("reset_button", "output_audio")
         
         self.any_identity_regex = re.compile(r"S\d+?:")
         self.sequence_split_regex = re.compile(rf"\s(?={self.any_identity_regex.pattern})")
@@ -105,12 +105,12 @@ class RealtimeAgentGradioInterface:
     
     def launch(self):
         title = "Real-time Dialogue Agent"
-        description = "Just click Record and start talking to the agent! ---- (Agent: Meta OPT 2.7b; " \
+        description = "Just click 'Record', uncheck 'Reset', and start talking! ---- (Agent: Meta OPT 2.7b; " \
                       "ASR: OpenAI Whisper; TTS: Meta FastSpeech2)"
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='medium.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.05, maximum=1.0, default=0.3, step=0.05, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.3, step=0.1, label="Agent prediction interval")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=3, step=1, label="TTS buffer size")
@@ -145,7 +145,8 @@ class RealtimeAgentGradioInterface:
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
-        reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)")
+        reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)",
+                                   elem_id="reset_button")
         
         state = gr.State({
             "dialogue": [], 
