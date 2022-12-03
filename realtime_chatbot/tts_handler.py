@@ -62,6 +62,9 @@ class TTSHandlerMultiprocessing:
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
         text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha!", text)
+        text = re.sub("yeah[.!?]*", "yeah,", text)
+        text = re.sub("hm+", "hm hm.", text)
+        text = re.sub("um+", "um,", text)
         text = re.sub(" {2,}", " ", text)
         text = text.strip()
         return text
