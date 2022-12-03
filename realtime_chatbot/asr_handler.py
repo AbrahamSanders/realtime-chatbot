@@ -1,4 +1,5 @@
 import whisper
+import torch
 import numpy as np
 from whisper import tokenizer, _MODELS
 from whisper.audio import SAMPLE_RATE
@@ -9,7 +10,7 @@ from .utils import queue_helpers
 from .utils import audio_helpers
 
 class ASRConfig:
-    def __init__(self, model_size = 'small.en', lang="English", n_context_segs=1, 
+    def __init__(self, model_size = 'medium.en', lang="English", n_context_segs=1, 
                  logprob_threshold=-0.4, no_speech_threshold=0.3, buffer_size=3):
         self.model_size = model_size
         self.lang = lang
@@ -22,7 +23,7 @@ class ASRConfig:
         return self.__dict__ == other.__dict__
 
 class ASRHandlerMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, chain_to_input_queue=None):
+    def __init__(self, wait_until_running=True, config=None, device=None, chain_to_input_queue=None):
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
@@ -38,7 +39,7 @@ class ASRHandlerMultiprocessing:
         self.available_languages = [self.AUTO_DETECT_LANG] + self.available_languages
         self.available_model_sizes = list(_MODELS)
 
-        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config,))
+        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
 
         if wait_until_running:
@@ -52,10 +53,10 @@ class ASRHandlerMultiprocessing:
     def is_running(self):
         return self.running.value
 
-    def execute(self, config):
+    def execute(self, config, device):
         if config is None:
             config = ASRConfig()
-        model = whisper.load_model(config.model_size)
+        model = whisper.load_model(config.model_size, device=device)
         last_n_segs = deque(maxlen=config.n_context_segs)
         input_buffer = []
 
@@ -68,7 +69,7 @@ class ASRHandlerMultiprocessing:
                 if new_config is not None:
                     if new_config.model_size != config.model_size:
                         print(f"Loading model {new_config.model_size}...")
-                        model = whisper.load_model(new_config.model_size)
+                        model = whisper.load_model(new_config.model_size, device=device)
                     if new_config.n_context_segs != config.n_context_segs:
                         last_n_segs = deque(maxlen=new_config.n_context_segs)
                     config = new_config
@@ -81,6 +82,7 @@ class ASRHandlerMultiprocessing:
                     next_input = (input_buffer[0][0], np.concatenate([buf[1] for buf in input_buffer]))
                     input_buffer.clear()
                     audio = audio_helpers.convert_sample_rate(next_input[1], next_input[0], SAMPLE_RATE)
+                    audio = torch.from_numpy(audio).to(model.device)
 
                     initial_prompt = " ".join([seg for seg in last_n_segs if seg])
                     transcription = model.transcribe(

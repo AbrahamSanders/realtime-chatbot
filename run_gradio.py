@@ -5,22 +5,26 @@ import uuid
 from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing, RealtimeAgentConfig
 from realtime_chatbot.tts_handler import TTSHandlerMultiprocessing, TTSConfig
 from realtime_chatbot.asr_handler import ASRHandlerMultiprocessing, ASRConfig
-from realtime_chatbot.utils import gradio_helpers
+from realtime_chatbot.utils import gradio_helpers, device_helpers
 from realtime_chatbot.identity import Identity
 
 class RealtimeAgentGradioInterface:
     def __init__(self):
+        device_map = device_helpers.get_device_map()
         self.tts_handler = TTSHandlerMultiprocessing(
-            wait_until_running=False
+            wait_until_running=False,
+            device=device_map["tts"]
         )
         self.agent = RealtimeAgentMultiprocessing(
-            wait_until_running=False, 
+            wait_until_running=False,
+            device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
             output_sequence=True,
-            output_sequence_max_length=1500
+            output_sequence_max_length=3000
         )
         self.asr_handler = ASRHandlerMultiprocessing(
-            wait_until_running=False, 
+            wait_until_running=False,
+            device=device_map["asr"],
             chain_to_input_queue=self.agent.input_queue
         )
         self.asr_handler.wait_until_running()
@@ -100,12 +104,12 @@ class RealtimeAgentGradioInterface:
     
     def launch(self):
         title = "Real-time Dialogue Agent"
-        description = "Just click Record and start talking to the agent! -- Agent: Meta OPT. " \
-                      "ASR: OpenAI Whisper. TTS: Meta FastSpeech2."
+        description = "Just click Record and start talking to the agent! ---- (Agent: Meta OPT 2.7b; " \
+                      "ASR: OpenAI Whisper; TTS: Meta FastSpeech2)"
 
-        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
+        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='medium.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.6, step=0.05, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.05, maximum=1.0, default=0.3, step=0.05, label="Agent prediction interval")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=3, step=1, label="TTS buffer size")

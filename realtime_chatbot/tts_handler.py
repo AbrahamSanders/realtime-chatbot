@@ -1,6 +1,5 @@
 from fairseq.checkpoint_utils import load_model_ensemble_and_task_from_hf_hub
 from fairseq.models.text_to_speech.hub_interface import TTSHubInterface
-from torchaudio.transforms import Resample
 import g2p_en
 import torch
 import re
@@ -8,7 +7,7 @@ from typing import Optional
 from time import sleep
 from datetime import datetime
 
-from .utils import queue_helpers
+from .utils import queue_helpers, audio_helpers
 
 class TTSConfig:
     def __init__(self, buffer_size=3, downsampling_factor=1):
@@ -19,7 +18,7 @@ class TTSConfig:
         return self.__dict__ == other.__dict__
 
 class TTSHandlerMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None):
+    def __init__(self, wait_until_running=True, config=None, device=None):
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
@@ -28,7 +27,7 @@ class TTSHandlerMultiprocessing:
         self.output_queue = ctx.Queue()
         self.running = ctx.Value(c_bool, False)
 
-        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config,))
+        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
 
         if wait_until_running:
@@ -59,25 +58,30 @@ class TTSHandlerMultiprocessing:
     def sanitize_text_for_tts(self, text):
         text = re.sub(r"\(\d*?\.\d*?\)", "", text)
         text = re.sub("[hx]{2,}", "", text)
+        text = re.sub(r"0 (?=\[%)", "", text)
+        text = re.sub(" 0[.]", "", text)
+        text = re.sub(r"\[%.*?\]", "", text)
+        text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha!", text)
         text = re.sub(" {2,}", " ", text)
         text = text.strip()
         return text
 
-    def execute(self, config):
+    def execute(self, config, device):
         if config is None:
             config = TTSConfig()
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.g2p = g2p_en.G2p()
         TTSHubInterface.phonemize = self.tts_phonemize
-        tts_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         models, cfg, tts_task = load_model_ensemble_and_task_from_hf_hub(
             "facebook/fastspeech2-en-ljspeech",
             arg_overrides={"vocoder": "hifigan", "fp16": False}
         )
-        tts_model = models[0].to(tts_device)
+        tts_model = models[0].to(device)
         TTSHubInterface.update_cfg_with_data_cfg(cfg, tts_task.data_cfg)
         tts_generator = tts_task.build_generator(models, cfg)
-        tts_generator.vocoder = tts_generator.vocoder.to(tts_device)
-        downsample = None
+        tts_generator.vocoder = tts_generator.vocoder.to(device)
+        cached_resample = None
         input_buffer = []
         last_output_time = datetime.now()
 
@@ -99,15 +103,12 @@ class TTSHandlerMultiprocessing:
                     next_input = self.sanitize_text_for_tts(next_input)
                     if next_input:
                         sample = TTSHubInterface.get_model_input(tts_task, next_input)
-                        sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(tts_device)
-                        sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(tts_device)
+                        sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(device)
+                        sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(device)
                         
                         wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
                         new_rate = rate // config.downsampling_factor
-                        if new_rate < rate:
-                            if downsample is None or downsample.orig_freq != rate or downsample.new_freq != new_rate:
-                                downsample = Resample(orig_freq=rate, new_freq=new_rate).to(tts_device)
-                            wav = downsample(wav)
+                        wav, cached_resample = audio_helpers.downsample(wav, rate, new_rate, cached_resample)
                         wav = wav.cpu().numpy()
                         
                         self.output_queue.put((new_rate, wav))

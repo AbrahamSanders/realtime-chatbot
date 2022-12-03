@@ -10,12 +10,14 @@ from .identity import Identity
 from .utils import queue_helpers
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="rtchat-2.7b/checkpoint-700"):
+    def __init__(self, modelpath="rtchat-2.7b/checkpoint-700", device=None):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
         # Device
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         # Model
         self.model = AutoModelForCausalLM.from_pretrained(modelpath)
         self.model = self.model.to(self.device)
@@ -25,7 +27,7 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.6, max_history_words=100, max_agent_pause_duration=10.0, random_state=None):
+                 interval=0.3, max_history_words=100, max_agent_pause_duration=10.0, random_state=None):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -59,11 +61,11 @@ class RealtimeAgent:
             "eos_token_id": self.resources.tokenizer.eos_token_id,
             "max_new_tokens": 5,
             "do_sample": True,
-            "top_p": 0.95,
-            "top_k": 50,
-            "temperature": 1.2,
-            #"num_beams": 2,
-            #"early_stopping": True
+            "top_p": 0.9,
+            "top_k": 70,
+            "temperature": 2.0,
+            "num_beams": 4,
+            "early_stopping": True
         }
 
         self.any_identity_regex = re.compile(r"S\d+?")
@@ -246,12 +248,12 @@ class RealtimeAgent:
         return output, sequence_changed
 
 class RealtimeAgentMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, chain_to_input_queue=None, 
+    def __init__(self, wait_until_running=True, config=None, device=None, chain_to_input_queue=None, 
                  output_sequence=False, output_sequence_max_length=None):
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
-        self.reset_queue = ctx.SimpleQueue()
+        self.reset_queue = ctx.Queue()
         self.config_queue = ctx.SimpleQueue()
         self.input_queue = ctx.Queue()
         self.output_queue = ctx.Queue()
@@ -261,7 +263,7 @@ class RealtimeAgentMultiprocessing:
         self.output_sequence_max_length = output_sequence_max_length
         self.running = ctx.Value(c_bool, False)
 
-        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config,))
+        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
 
         if wait_until_running:
@@ -275,8 +277,9 @@ class RealtimeAgentMultiprocessing:
     def is_running(self):
         return self.running.value
 
-    def execute(self, config):
-        agent = RealtimeAgent(config=config)
+    def execute(self, config, device):
+        agent_resources = RealtimeAgent_Resources(device=device)
+        agent = RealtimeAgent(resources=agent_resources, config=config)
 
         self.running.value = True
         while True:
