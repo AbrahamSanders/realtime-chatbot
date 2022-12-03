@@ -169,7 +169,7 @@ class RealtimeAgent:
         self.sequence = ""
         self._set_prefix()
         self._set_current_speaker(self.config.user_identity)
-        self.last_cycle_end_time = datetime.now()
+        self.last_cycle_time = datetime.now()
         self.agent_pause_duration = 0.0
 
     def set_config(self, config):
@@ -179,8 +179,10 @@ class RealtimeAgent:
             self._set_prefix()
 
     def execute(self, next_input=None):
-        # Check for new input:
+        output = None
         sequence_changed = False
+
+        # Check for new input:
         if next_input:
             if self.current_speaker != self.config.user_identity:
                 self._set_current_speaker(self.config.user_identity)
@@ -188,12 +190,12 @@ class RealtimeAgent:
             sequence_changed = True
             #print(f"input on sequence: {next_input}")
 
-        output = None
-        seconds_since_last_cycle = (datetime.now() - self.last_cycle_end_time).total_seconds()
         # If it is not time to run the next predict/output cycle yet, just return nothing.
-        # Otherwise, proceed.
+        # Otherwise, set the last cycle time to now and proceed.
+        seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
         if seconds_since_last_cycle < self.config.interval + self.agent_pause_duration:
             return output, sequence_changed
+        self.last_cycle_time = datetime.now()
 
         # If no new input and the user is currently speaking, append an incrementing pause for the user:
         if not next_input and self.current_speaker == self.config.user_identity:
@@ -243,7 +245,6 @@ class RealtimeAgent:
                     self.agent_pause_duration = self.config.interval if agent_pause[0] == "(.)" else float(agent_pause[0][1:-1])
                     self.agent_pause_duration = min(self.agent_pause_duration, self.config.max_agent_pause_duration)
 
-        self.last_cycle_end_time = datetime.now()
         #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")
         return output, sequence_changed
 
