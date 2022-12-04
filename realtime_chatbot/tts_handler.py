@@ -5,12 +5,11 @@ import torch
 import re
 from typing import Optional
 from time import sleep
-from datetime import datetime
 
 from .utils import queue_helpers, audio_helpers
 
 class TTSConfig:
-    def __init__(self, buffer_size=3, downsampling_factor=1, speaker=0):
+    def __init__(self, buffer_size=4, downsampling_factor=1, speaker=0):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
         self.speaker = speaker
@@ -27,6 +26,8 @@ class TTSHandlerMultiprocessing:
         self.input_queue = ctx.Queue()
         self.output_queue = ctx.Queue()
         self.running = ctx.Value(c_bool, False)
+
+        self.pause_regex = re.compile(r"\(\d*?\.\d*?\)")
 
         self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
@@ -57,12 +58,13 @@ class TTSHandlerMultiprocessing:
             return " ".join(p for p in res if p.isalnum())
 
     def sanitize_text_for_tts(self, text):
-        text = re.sub(r"\(\d*?\.\d*?\)", "", text)
-        text = re.sub("[hx]{2,}", "", text)
+        text = re.sub(self.pause_regex, "", text)
+        text = re.sub(r"(?:\s|\A)[hx]+(?=(?:\s|\Z))", "", text)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
         text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha!", text)
+        text = re.sub(r"&=.+?(?=(?:\s|\Z))", "", text)
         text = re.sub("yeah[.!?]*", "yeah,", text)
         text = re.sub("hm+", "hm hm.", text)
         text = re.sub("um+", "um,", text)
@@ -88,7 +90,6 @@ class TTSHandlerMultiprocessing:
         tts_generator.vocoder = tts_generator.vocoder.to(device)
         cached_resample = None
         input_buffer = []
-        last_output_time = datetime.now()
 
         self.running.value = True
         while True:
@@ -99,12 +100,27 @@ class TTSHandlerMultiprocessing:
 
                 queue_helpers.transfer_queue_to_buffer(self.input_queue, input_buffer)
 
-                seconds_since_last_output = (datetime.now() - last_output_time).total_seconds()
-                buffer_size = config.buffer_size if seconds_since_last_output < config.buffer_size \
-                                                 else config.buffer_size // 2 + 1
-                if len(input_buffer) >= buffer_size:
-                    next_input = " ".join(input_buffer)
-                    input_buffer.clear()
+                # Determine what items in the input buffer to process:
+                # - If the buffer is full, process the whole buffer. 
+                # - If the buffer is not full but item(s) exist that contain a pause, 
+                #   process everything up to and including the last pause.
+                # - Otherwise, do nothing.
+                items_to_process = None
+                if len(input_buffer) >= config.buffer_size:
+                    items_to_process = input_buffer
+                else:
+                    idx_after_last_pause = None
+                    for i in range(len(input_buffer)-1, -1, -1):
+                        if re.search(self.pause_regex, input_buffer[i]):
+                            idx_after_last_pause = i+1
+                            break
+                    if idx_after_last_pause is not None:
+                        items_to_process = input_buffer[:idx_after_last_pause]
+                        input_buffer = input_buffer[idx_after_last_pause:]
+
+                if items_to_process is not None:
+                    next_input = " ".join(items_to_process)
+                    items_to_process.clear()
                     next_input = self.sanitize_text_for_tts(next_input)
                     if next_input:
                         sample = TTSHubInterface.get_model_input(tts_task, next_input, speaker=config.speaker)
@@ -119,7 +135,6 @@ class TTSHandlerMultiprocessing:
                         wav = wav.cpu().numpy()
                         
                         self.output_queue.put((new_rate, wav))
-                        last_output_time = datetime.now()
             except:
                 #TODO: logging here
                 pass
