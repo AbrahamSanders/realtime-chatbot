@@ -141,7 +141,7 @@ class RealtimeAgentGradioInterface:
         agent_voice_dropdown = gr.inputs.Dropdown(
             type="index",
             choices=[f"Voice {i+1}" for i in range(200)],
-            default="Voice 47", label="Agent Voice"
+            default="Voice 16", label="Agent Voice"
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
