@@ -59,7 +59,7 @@ class RealtimeAgent:
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
-            "max_new_tokens": 8,
+            "max_new_tokens": 5,
             "do_sample": True,
             "top_p": 0.9,
             "top_k": 70,
