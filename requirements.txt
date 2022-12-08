@@ -1,0 +1,12 @@
+fairseq
+g2p-en
+gradio
+numpy>=1.20.0
+pylangacq
+scikit-learn
+sshkeyboard
+torch
+torchaudio
+tqdm
+transformers>=4.24.0
+whisper @ git+https://github.com/openai/whisper.git
