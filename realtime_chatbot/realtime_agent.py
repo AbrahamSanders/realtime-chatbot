@@ -10,7 +10,7 @@ from .identity import Identity
 from .utils import queue_helpers
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="rtchat-2.7b/checkpoint-700", device=None):
+    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat", device=None):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
@@ -59,7 +59,7 @@ class RealtimeAgent:
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
-            "max_new_tokens": 5,
+            "max_new_tokens": 10,
             "do_sample": True,
             "top_p": 0.9,
             "top_k": 70,
@@ -106,9 +106,11 @@ class RealtimeAgent:
 
         # Decode and return results
         results = []
+        take_tokens = 5
         for i in range(result_ids.shape[0]):
             response_start_idx = inputs.input_ids.shape[-1]
-            generated_text = self.resources.tokenizer.decode(result_ids[i, response_start_idx:], 
+            response_end_idx = response_start_idx + take_tokens
+            generated_text = self.resources.tokenizer.decode(result_ids[i, response_start_idx:response_end_idx], 
                                                              skip_special_tokens=False)
             generated_text = generated_text.replace(self.resources.tokenizer.pad_token, "")
             generated_text = generated_text.replace(self.resources.tokenizer.eos_token, "")
