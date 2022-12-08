@@ -49,6 +49,8 @@ To launch the terminal interface, run:
 ```bash
 python run_chat.py
 ```
+Running this interface will use between 12GB and 15GB of GPU RAM and should run smoothly on a machine with a single 16GB GPU.
+
 Keyboard input into the terminal input is processed in real-time to emulate continuous speech input.
 While you type, words are submitted to the agent after `space` or `enter` are pressed.
 
@@ -74,7 +76,7 @@ python prep_datast.py --help
 ```
 
 #### Train an agent model
-The [train.py](train.py) script is a modified copy of [HuggingFace's run_clm.py script](https://github.com/huggingface/transformers/blob/v4.24.0/examples/pytorch/language-modeling/run_clm.py), adapted to use with a line-by-line text file datasets that require 
+The [train.py](train.py) script is a modified copy of [HuggingFace's run_clm.py script](https://github.com/huggingface/transformers/blob/v4.24.0/examples/pytorch/language-modeling/run_clm.py), adapted to use with line-by-line text file datasets that require 
 padding each example instead of chunking them into fixed size blocks.
 
 The provided shell script [train_large.sh](train_large.sh) is pre-configured to fine-tune `facebook/opt-2.7b` using `train.py`. 
