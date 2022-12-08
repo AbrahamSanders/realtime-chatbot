@@ -6,7 +6,7 @@ for specific tasks, this is a completely open-domain system intended to converse
 turn-taking rules - the agent is free to speak whenever it chooses and learns coordination behavior directly from the training data.
 
 - [OpenAI Whisper](https://github.com/openai/whisper) is used for Automatic Speech Recognition (ASR).
-- Meta's OPT 2.7b fine-tuned on transcribed spoken dialogue from [TalkBank](https://ca.talkbank.org/access/) is used for the dialogue agent. See the [model card](AbrahamSanders/opt-2.7b-realtime-chat) for more details.
+- Meta's OPT 2.7b fine-tuned on transcribed spoken dialogue from [TalkBank](https://ca.talkbank.org/access/) is used for the dialogue agent. See the [model card](https://huggingface.co/AbrahamSanders/opt-2.7b-realtime-chat) for more details.
 - [Meta's FastSpeech2](https://huggingface.co/facebook/fastspeech2-en-200_speaker-cv4) trained on [Common Voice v4](https://commonvoice.mozilla.org/en/datasets) is used for Text to Speech (TTS).
 
 ![System architecture](images/system_architecture.png)
