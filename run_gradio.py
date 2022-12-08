@@ -5,11 +5,12 @@ import uuid
 from realtime_chatbot.realtime_agent import RealtimeAgentMultiprocessing, RealtimeAgentConfig
 from realtime_chatbot.tts_handler import TTSHandlerMultiprocessing, TTSConfig
 from realtime_chatbot.asr_handler import ASRHandlerMultiprocessing, ASRConfig
-from realtime_chatbot.utils import gradio_helpers, device_helpers
+from realtime_chatbot.utils import gradio_helpers, device_helpers, args_helpers
 from realtime_chatbot.identity import Identity
 
 class RealtimeAgentGradioInterface:
-    def __init__(self):
+    def __init__(self, args):
+        self.args = args
         device_map = device_helpers.get_device_map()
         self.tts_handler = TTSHandlerMultiprocessing(
             wait_until_running=False,
@@ -17,6 +18,8 @@ class RealtimeAgentGradioInterface:
         )
         self.agent = RealtimeAgentMultiprocessing(
             wait_until_running=False,
+            config=RealtimeAgentConfig(random_state=self.args.random_state),
+            modelpath=self.args.agent_modelpath,
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
             output_sequence=True,
@@ -64,7 +67,7 @@ class RealtimeAgentGradioInterface:
         agent_config = RealtimeAgentConfig(interval=agent_interval, identities={
             "S1": Identity(user_name, user_age, user_sex),
             "S2": Identity(agent_name, agent_age, agent_sex)
-        })
+        }, random_state=self.args.random_state)
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
@@ -151,7 +154,7 @@ class RealtimeAgentGradioInterface:
         state = gr.State({
             "dialogue": [], 
             "asr_config": ASRConfig(), 
-            "agent_config": RealtimeAgentConfig(), 
+            "agent_config": RealtimeAgentConfig(random_state=self.args.random_state),
             "tts_config": TTSConfig()
         })
 
@@ -191,5 +194,12 @@ class RealtimeAgentGradioInterface:
         dialogue_interface.launch()
 
 if __name__ == "__main__":
-    interface = RealtimeAgentGradioInterface()
+    parser = args_helpers.get_common_arg_parser()
+    args = parser.parse_args()
+
+    print("\nRunning with arguments:")
+    print(args)
+    print()
+
+    interface = RealtimeAgentGradioInterface(args)
     interface.launch()

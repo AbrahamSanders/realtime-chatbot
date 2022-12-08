@@ -4,7 +4,7 @@ from threading import Thread
 from queue import SimpleQueue
 from time import sleep
 
-from realtime_chatbot.utils import queue_helpers
+from realtime_chatbot.utils import queue_helpers, args_helpers
 from realtime_chatbot.identity import Identity
 
 class KeyboardListener:
@@ -42,9 +42,16 @@ def configure_identities():
     return identities
 
 def main():
+    parser = args_helpers.get_common_arg_parser()
+    args = parser.parse_args()
+
+    print("\nRunning with arguments:")
+    print(args)
+    print()
+
     identities = configure_identities()
-    config = RealtimeAgentConfig(identities=identities)
-    agent = RealtimeAgentMultiprocessing(config=config)
+    config = RealtimeAgentConfig(identities=identities, random_state=args.random_state)
+    agent = RealtimeAgentMultiprocessing(config=config, modelpath=args.agent_modelpath)
     listener = KeyboardListener()
     user_speaking = None
     print("\n\n>>>Running<<<\n\n")
@@ -74,7 +81,7 @@ def main():
             print(next_output, end="", flush=True)
 
         # Brief sleep to avoid tight loop
-        sleep(0.01)
+        sleep(0.05)
 
 if __name__ == "__main__":
     main()

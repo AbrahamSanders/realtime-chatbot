@@ -251,8 +251,8 @@ class RealtimeAgent:
         return output, sequence_changed
 
 class RealtimeAgentMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, device=None, chain_to_input_queue=None, 
-                 output_sequence=False, output_sequence_max_length=None):
+    def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/opt-2.7b-realtime-chat",
+                 device=None, chain_to_input_queue=None, output_sequence=False, output_sequence_max_length=None):
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
@@ -266,7 +266,7 @@ class RealtimeAgentMultiprocessing:
         self.output_sequence_max_length = output_sequence_max_length
         self.running = ctx.Value(c_bool, False)
 
-        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
+        self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, modelpath, device))
         self.execute_process.start()
 
         if wait_until_running:
@@ -280,8 +280,8 @@ class RealtimeAgentMultiprocessing:
     def is_running(self):
         return self.running.value
 
-    def execute(self, config, device):
-        agent_resources = RealtimeAgent_Resources(device=device)
+    def execute(self, config, modelpath, device):
+        agent_resources = RealtimeAgent_Resources(modelpath=modelpath, device=device)
         agent = RealtimeAgent(resources=agent_resources, config=config)
 
         self.running.value = True
