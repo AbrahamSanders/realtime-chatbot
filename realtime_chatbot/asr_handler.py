@@ -1,6 +1,4 @@
 import whisper
-import torch
-import numpy as np
 from whisper import tokenizer, _MODELS
 from whisper.audio import SAMPLE_RATE
 from time import sleep
@@ -23,7 +21,8 @@ class ASRConfig:
         return self.__dict__ == other.__dict__
 
 class ASRHandlerMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, device=None, chain_to_input_queue=None):
+    def __init__(self, wait_until_running=True, config=None, device=None, chain_to_input_queue=None, 
+                 output_debug_audio=False):
         import multiprocessing as mp
         from ctypes import c_bool
         ctx = mp.get_context("spawn")
@@ -31,6 +30,9 @@ class ASRHandlerMultiprocessing:
         self.input_queue = ctx.Queue()
         self.output_queue = ctx.Queue()
         self.chain_to_input_queue = chain_to_input_queue
+        if output_debug_audio:
+            self.debug_audio_queue = ctx.Queue()
+        self.output_debug_audio = output_debug_audio
         self.running = ctx.Value(c_bool, False)
 
         self.AUTO_DETECT_LANG = "Auto Detect"
@@ -58,6 +60,7 @@ class ASRHandlerMultiprocessing:
             config = ASRConfig()
         model = whisper.load_model(config.model_size, device=device)
         last_n_segs = deque(maxlen=config.n_context_segs)
+        cached_resample = None
         input_buffer = []
 
         self.running.value = True
@@ -79,10 +82,13 @@ class ASRHandlerMultiprocessing:
                 #print(f"Transfered {n_transfered} audio segments to buffer.")
                 
                 if len(input_buffer) >= config.buffer_size:
-                    next_input = (input_buffer[0][0], np.concatenate([buf[1] for buf in input_buffer]))
+                    next_input = audio_helpers.concat_audios_to_tensor(input_buffer)
                     input_buffer.clear()
-                    audio = audio_helpers.convert_sample_rate(next_input[1], next_input[0], SAMPLE_RATE)
-                    audio = torch.from_numpy(audio).to(model.device)
+                    
+                    audio = next_input[0].to(device=model.device)
+                    audio, cached_resample = audio_helpers.downsample(audio, next_input[1], SAMPLE_RATE, cached_resample)
+                    if self.output_debug_audio:
+                        self.debug_audio_queue.put((SAMPLE_RATE, audio.cpu().numpy()))
 
                     initial_prompt = " ".join([seg for seg in last_n_segs if seg])
                     transcription = model.transcribe(
@@ -115,4 +121,7 @@ class ASRHandlerMultiprocessing:
 
     def next_output(self):
         return queue_helpers.join_queue(self.output_queue)
+
+    def next_debug_audio(self):
+        return queue_helpers.join_queue_audio(self.debug_audio_queue)
         
