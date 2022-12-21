@@ -71,11 +71,12 @@ class RealtimeAgent:
         self.any_identity_regex = re.compile(r"S\d+?")
         self.any_identity_with_incomplete_regex = re.compile(rf" (?:{self.any_identity_regex.pattern}|S\Z)")
         self.agent_turn_switch_regex = re.compile(rf"(?<={self.config.agent_identity}:).+?(?= {self.any_identity_regex.pattern}|\Z)")
-        self.agent_continue_regex = re.compile(rf".+?(?= {self.any_identity_regex.pattern}|\Z)")
+        self.speaker_continue_regex = re.compile(rf".+?(?= {self.any_identity_regex.pattern}|\Z)")
         self.pause_regex = re.compile(r"\(\d*?\.\d*?\)")
         self.pause_at_end_regex = re.compile(rf"{self.pause_regex.pattern}\Z")
         self.incomplete_pause_regex = re.compile(r"\(\d*?\.?\d*?\Z")
         self.end_pause_regex = re.compile(r"\)")
+        self.input_segments_regex = re.compile(" (?=[~*])")
 
         self.prefix_length = None
         
@@ -140,7 +141,10 @@ class RealtimeAgent:
                     break
             i = 0 if i == len(history_split)-1 else i
             trimmed_history = " ".join(history_split[i:])
+            prev_sequence_length = len(self.sequence)
             self.sequence = f"{self.sequence[:self.prefix_length]}{trimmed_history}"
+            if self.partial_pos > -1:
+                self.partial_pos += len(self.sequence)-prev_sequence_length
 
     def _incrementing_pause(self, seconds_since_last_cycle):
         # get previous pause duration (if any)
@@ -161,14 +165,53 @@ class RealtimeAgent:
         for identity, info in self.config.identities.items():
             prefix += f"<participant> {identity} (name: {info.name}, age: {info.age}, sex: {info.sex}) "
         prefix += "<dialog>"
+        prev_prefix_length = None
         if len(self.sequence) > 0 and self.prefix_length is not None:
             self.sequence = f"{prefix} {self.sequence[self.prefix_length:]}"
+            prev_prefix_length = self.prefix_length
         else:
             self.sequence = prefix
         self.prefix_length = len(prefix)+1
+        if prev_prefix_length is not None and self.partial_pos > -1:
+            self.partial_pos += self.prefix_length-prev_prefix_length
+
+    def _update_sequence_from_input(self, next_input):
+        sequence_changed = False
+        if next_input:
+            # First, clear out the previous partial utterance segment (if exists)
+            next_turn = None
+            if self.partial_pos > -1:
+                # Locate any turn taken by another speaker after the partial utterance has started
+                partial_utterance = self.sequence[self.partial_pos:]
+                turn_switch = re.search(self.any_identity_regex, partial_utterance)
+                if turn_switch:
+                    next_turn = partial_utterance[turn_switch.start():]
+                # Reset the sequence to the position where the partial utterance begins
+                self.sequence = self.sequence[:self.partial_pos]
+                self.partial_pos = -1
+            # If no partial utterance exists and the user is not speaking, set the user
+            # as the active speaker
+            elif self.current_speaker != self.config.user_identity:
+                self._set_current_speaker(self.config.user_identity)
+            # Next, add the new segments to the transcription, 
+            # discarding intermediate partial segments.
+            new_segments = re.split(self.input_segments_regex, next_input)
+            for i, seg in enumerate(new_segments):
+                if len(seg) > 1 and (seg.startswith("*") or i == len(new_segments)-1):
+                    if seg.startswith("~"):
+                        self.partial_pos = len(self.sequence)
+                    self.sequence += f" {seg[1:]}"
+            # Finally, in case a partial utterance was replaced that was followed by a next turn,
+            # put that next turn back.
+            if next_turn:
+                self.sequence += f" {next_turn}"
+            sequence_changed = True
+
+        return sequence_changed
 
     def reset(self):
         self.sequence = ""
+        self.partial_pos = -1
         self._set_prefix()
         self._set_current_speaker(self.config.user_identity)
         self.last_cycle_time = datetime.now()
@@ -185,12 +228,7 @@ class RealtimeAgent:
         sequence_changed = False
 
         # Check for new input:
-        if next_input:
-            if self.current_speaker != self.config.user_identity:
-                self._set_current_speaker(self.config.user_identity)
-            self.sequence += f" {next_input}"
-            sequence_changed = True
-            #print(f"input on sequence: {next_input}")
+        sequence_changed = self._update_sequence_from_input(next_input)
 
         # If it is not time to run the next predict/output cycle yet, just return nothing.
         # Otherwise, set the last cycle time to now and proceed.
@@ -200,7 +238,7 @@ class RealtimeAgent:
         self.last_cycle_time = datetime.now()
 
         # If no new input and the user is currently speaking, append an incrementing pause for the user:
-        if not next_input and self.current_speaker == self.config.user_identity:
+        if not sequence_changed and self.current_speaker == self.config.user_identity:
             user_pause = self._incrementing_pause(seconds_since_last_cycle)
             self.sequence += user_pause
             sequence_changed = True
@@ -230,7 +268,7 @@ class RealtimeAgent:
         # If prediction is not a turn switch and the agent is currently speaking, output the prediction,
         # otherwise suppress the prediction (output nothing):
         elif self.current_speaker == self.config.agent_identity:
-            output = re.search(self.agent_continue_regex, prediction)[0]
+            output = re.search(self.speaker_continue_regex, prediction)[0]
 
         if output:
             # suppress anything that comes after a turn switch prediction (including an incomplete one at the end).

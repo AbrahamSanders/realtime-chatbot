@@ -102,7 +102,7 @@ if __name__ == "__main__":
     asr_handler = ASRHandlerMultiprocessing(
             device=torch.device("cuda:1"),
             wait_until_running=False,
-            config=ASRConfig(buffer_size=1)
+            config=ASRConfig(max_buffer_size=1)
         )
     asr_handler.wait_until_running()
 

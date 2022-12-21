@@ -54,12 +54,12 @@ class RealtimeAgentGradioInterface:
         return dialogue_unflattened
 
     def execute(self, state, audio, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, 
-                asr_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
+                asr_max_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
                 user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
         # queue up configs in case any changes were made.
         asr_config = ASRConfig(model_size=asr_model_size, lang=asr_lang, logprob_threshold=asr_logprob_threshold, 
-                               no_speech_threshold=asr_no_speech_threshold, buffer_size=asr_buffer_size)
+                               no_speech_threshold=asr_no_speech_threshold, max_buffer_size=asr_max_buffer_size)
         if asr_config != state["asr_config"]:
             state["asr_config"] = asr_config
             self.asr_handler.queue_config(asr_config)
@@ -117,9 +117,9 @@ class RealtimeAgentGradioInterface:
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
-        asr_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=3, step=1, label="ASR buffer size")
-        asr_logprob_threshold_slider = gr.inputs.Slider(minimum=-3.0, maximum=0.0, default=-0.4, step=0.05, label="ASR Log prob threshold")
-        asr_no_speech_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.3, step=0.05, label="ASR No speech threshold")
+        asr_max_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=10, default=5, step=1, label="ASR max buffer size")
+        asr_logprob_threshold_slider = gr.inputs.Slider(minimum=-3.0, maximum=0.0, default=-0.7, step=0.05, label="ASR Log prob threshold")
+        asr_no_speech_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.6, step=0.05, label="ASR No speech threshold")
 
         asr_lang_dropdown = gr.inputs.Dropdown(choices=self.asr_handler.available_languages, label="ASR Language", 
                                                default="English", type="value")
@@ -167,7 +167,7 @@ class RealtimeAgentGradioInterface:
                 agent_interval_slider,
                 tts_downsampling_factor_slider,
                 tts_buffer_size_slider,
-                asr_buffer_size_slider,
+                asr_max_buffer_size_slider,
                 asr_model_size,
                 asr_logprob_threshold_slider,
                 asr_no_speech_threshold_slider,
