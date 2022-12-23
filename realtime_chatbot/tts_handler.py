@@ -7,12 +7,14 @@ from typing import Optional
 from time import sleep
 
 from .utils import queue_helpers, audio_helpers
+from .speech_enhancer import SpeechEnhancer
 
 class TTSConfig:
-    def __init__(self, buffer_size=4, downsampling_factor=1, speaker=0):
+    def __init__(self, buffer_size=4, downsampling_factor=1, speaker=0, enhancement_model="none"):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
         self.speaker = speaker
+        self.enhancement_model = enhancement_model
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -88,6 +90,7 @@ class TTSHandlerMultiprocessing:
         TTSHubInterface.update_cfg_with_data_cfg(cfg, tts_task.data_cfg)
         tts_generator = tts_task.build_generator(models, cfg)
         tts_generator.vocoder = tts_generator.vocoder.to(device)
+        speech_enhancer = SpeechEnhancer(device=device)
         cached_resample = None
         input_buffer = []
 
@@ -130,10 +133,13 @@ class TTSHandlerMultiprocessing:
                             sample["speaker"] = sample["speaker"].to(device)
                         
                         wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
+
+                        # downsample & enhance (if selected)
                         new_rate = rate // config.downsampling_factor
                         wav, cached_resample = audio_helpers.downsample(wav, rate, new_rate, cached_resample)
+                        wav, new_rate = speech_enhancer.enhance(config.enhancement_model, wav, new_rate)
+
                         wav = wav.cpu().numpy()
-                        
                         self.output_queue.put((new_rate, wav))
             except:
                 #TODO: logging here

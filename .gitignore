@@ -135,3 +135,5 @@ data/*
 !data/readme.md
 
 rtchat-*/
+
+speechbrain/*
