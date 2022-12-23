@@ -4,6 +4,7 @@ gradio
 numpy>=1.20.0
 pylangacq
 scikit-learn
+speechbrain
 sshkeyboard
 torch
 torchaudio

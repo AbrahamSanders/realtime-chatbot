@@ -66,7 +66,7 @@ def main():
                 agent.queue_reset()
                 print("\n\n>>>Reset<<<\n")
                 continue
-            agent.queue_input(next_input)
+            agent.queue_input(f"*{next_input}")
             if user_speaking is None or not user_speaking:
                 user_speaking = True
                 print(f"\n{config.user_identity}:", end="", flush=True)
