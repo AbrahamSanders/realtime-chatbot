@@ -233,7 +233,7 @@ class RealtimeAgent:
         # If it is not time to run the next predict/output cycle yet, just return nothing.
         # Otherwise, set the last cycle time to now and proceed.
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
-        if seconds_since_last_cycle < self.config.interval + self.agent_pause_duration:
+        if seconds_since_last_cycle < max(self.config.interval, self.agent_pause_duration):
             return output, sequence_changed
         self.last_cycle_time = datetime.now()
 
