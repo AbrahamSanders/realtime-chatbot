@@ -58,9 +58,9 @@ class Test:
         return len(str)
 
     def _update_sequence_from_input2(self, next_input):
+        sequence_changed = False
         if not next_input:
-            return False
-
+            return sequence_changed
         # First, clear out the previous partial utterance segment (if exists)
         utterances_after_partial_pos = []
         if self.partial_pos > -1:
@@ -68,11 +68,12 @@ class Test:
             utterances_after_partial_pos = re.split(self.sequence_split_regex, self.sequence[self.partial_pos:])
             # Reset the sequence to the position where the partial utterance begins
             self.sequence = self.sequence[:self.partial_pos]
+            sequence_changed = True
             self.partial_pos = -1
         # Next, add the new segments to the sequence, discarding intermediate partial segments.
         new_segments = re.split(self.input_segments_regex, next_input)
         for i, seg in enumerate(new_segments):
-            if len(seg) > 1 and (seg.startswith("*") or i == len(new_segments)-1):
+            if seg and (seg.startswith("*") or i == len(new_segments)-1):
                 if seg.startswith("~"):
                     self.partial_pos = len(self.sequence)
                 seg_text = seg[1:]
@@ -87,6 +88,7 @@ class Test:
                             self._set_current_speaker(identity_match[0])
                             utt = utt[identity_match.end()+1:].lstrip()
                             self.sequence += f" {utt}"
+                            sequence_changed = True
                         elif seg_text:
                             # replace user utterance with words (of same approximate length)
                             # from the new segment
@@ -98,6 +100,7 @@ class Test:
                             if has_user_identity:
                                 self._set_current_speaker(self.config.user_identity)
                             self.sequence += f" {seg_text[:next_slice_idx]}"
+                            sequence_changed = True
                             seg_text = seg_text[next_slice_idx:].lstrip()
                 utterances_after_partial_pos.clear()
                 # any remaining text in the new segment is appended to the end of the sequence
@@ -105,24 +108,27 @@ class Test:
                     if self.current_speaker != self.config.user_identity:
                         self._set_current_speaker(self.config.user_identity)
                     self.sequence += f" {seg_text}"
-        return True
+                    sequence_changed = True
+        return sequence_changed
 
 if __name__ == "__main__":
     current_speaker = "S2"
-    sequence = "because I've been getting a lot of pains (4.4) S2: (1.7)"
-    partial_pos = -1
-    input = "*alright yeah I said"
+    sequence = "because I've been getting a lot S1: alright yeah I said S2: yeah? S1: come over S2: alright."
+    partial_pos = 79
+    input = "~come over ~come over to *"
 
     test = Test(current_speaker, sequence, partial_pos)
-    test._update_sequence_from_input(input)
+    sequence_changed = test._update_sequence_from_input(input)
     print("Original:")
     print(test.sequence)
     print(test.partial_pos)
     print(test.current_speaker)
+    print(sequence_changed)
 
     test2 = Test(current_speaker, sequence, partial_pos)
-    test2._update_sequence_from_input2(input)
+    sequence_changed = test2._update_sequence_from_input2(input)
     print("\nNew:")
     print(test2.sequence)
     print(test2.partial_pos)
     print(test2.current_speaker)
+    print(sequence_changed)
