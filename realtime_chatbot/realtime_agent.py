@@ -27,7 +27,7 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.4, max_history_words=100, max_agent_pause_duration=10.0, random_state=None):
+                 interval=0.6, max_history_words=100, max_agent_pause_duration=10.0, random_state=None):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
