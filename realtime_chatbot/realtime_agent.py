@@ -207,6 +207,7 @@ class RealtimeAgent:
                 # Iterate through all turns taken after the previous partial utterance started.
                 # Replace user utterances with words from the new segment while carrying non-user 
                 # utterances over intact.
+                deferred_start = False
                 for j, utt in enumerate(utterances_after_partial_pos):
                     identity_match = re.match(self.any_identity_regex, utt)
                     if identity_match and not utt.startswith(self.config.user_identity):
@@ -214,7 +215,8 @@ class RealtimeAgent:
                         # and there are two or less words left in the new segment, append those words to the previous
                         # utterance instead of letting them hang off the end of the sequence as a new user utterance.
                         # Note: assumes the previous utterance belongs to user. Will need to revisit for multiparty.
-                        if j == len(utterances_after_partial_pos)-1 and seg_text and seg_text.count(" ") < 2:
+                        if (j == len(utterances_after_partial_pos)-1 and seg_text and seg_text.count(" ") < 2
+                                                                     and (j > 1 or not deferred_start)):
                             self.sequence += f" {seg_text}"
                             seg_text = ""
                         # carry non-user utterance over intact
@@ -233,7 +235,8 @@ class RealtimeAgent:
                         seg_text_slice = seg_text[:next_slice_idx]
                         # if this utterance is the first turn after the previous partial utterance started
                         # and there are two or less words to place before the next turn, defer these words to appear after it.
-                        if j == 0 and seg_text_slice.count(" ") < 2:
+                        if j == 0 and len(utterances_after_partial_pos) > 1 and seg_text_slice.count(" ") < 2:
+                            deferred_start = True
                             continue
                         if has_user_identity:
                             self._set_current_speaker(self.config.user_identity)
