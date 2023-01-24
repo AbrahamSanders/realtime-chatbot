@@ -66,6 +66,7 @@ class Test:
         if self.partial_pos > -1:
             # Locate all turns taken after the partial utterance has started
             utterances_after_partial_pos = re.split(self.sequence_split_regex, self.sequence[self.partial_pos:])
+            utterances_after_partial_pos = list(filter(None, utterances_after_partial_pos))
             # Reset the sequence to the position where the partial utterance begins
             self.sequence = self.sequence[:self.partial_pos]
             sequence_changed = True
@@ -80,28 +81,39 @@ class Test:
                 # Iterate through all turns taken after the previous partial utterance started.
                 # Replace user utterances with words from the new segment while carrying non-user 
                 # utterances over intact.
-                for utt in utterances_after_partial_pos:
-                    if utt:
-                        identity_match = re.match(self.any_identity_regex, utt)
-                        if identity_match and not utt.startswith(self.config.user_identity):
-                            # carry non-user utterance over intact
-                            self._set_current_speaker(identity_match[0])
-                            utt = utt[identity_match.end()+1:].lstrip()
-                            self.sequence += f" {utt}"
-                            sequence_changed = True
-                        elif seg_text:
-                            # replace user utterance with words (of same approximate length)
-                            # from the new segment
-                            has_user_identity = utt.startswith(self.config.user_identity)
-                            if has_user_identity:
-                                utt = utt[len(self.config.user_identity)+1:]
-                            utt = utt.lstrip()
-                            next_slice_idx = self._get_next_slice_index(seg_text, len(utt))
-                            if has_user_identity:
-                                self._set_current_speaker(self.config.user_identity)
-                            self.sequence += f" {seg_text[:next_slice_idx]}"
-                            sequence_changed = True
-                            seg_text = seg_text[next_slice_idx:].lstrip()
+                for j, utt in enumerate(utterances_after_partial_pos):
+                    identity_match = re.match(self.any_identity_regex, utt)
+                    if identity_match and not utt.startswith(self.config.user_identity):
+                        # if this utterance is the last turn after the previous partial utterance started
+                        # and there are two or less words left in the new segment, append those words to the previous
+                        # utterance instead of letting them hang off the end of the sequence as a new user utterance.
+                        # Note: assumes the previous utterance belongs to user. Will need to revisit for multiparty.
+                        if j == len(utterances_after_partial_pos)-1 and seg_text and seg_text.count(" ") < 2:
+                            self.sequence += f" {seg_text}"
+                            seg_text = ""
+                        # carry non-user utterance over intact
+                        self._set_current_speaker(identity_match[0])
+                        utt = utt[identity_match.end()+1:].lstrip()
+                        self.sequence += f" {utt}"
+                        sequence_changed = True
+                    elif seg_text:
+                        # replace user utterance with words (of same approximate length)
+                        # from the new segment
+                        has_user_identity = utt.startswith(self.config.user_identity)
+                        if has_user_identity:
+                            utt = utt[len(self.config.user_identity)+1:]
+                        utt = utt.lstrip()
+                        next_slice_idx = self._get_next_slice_index(seg_text, len(utt))
+                        seg_text_slice = seg_text[:next_slice_idx]
+                        # if this utterance is the first turn after the previous partial utterance started
+                        # and there are two or less words to place before the next turn, defer these words to appear after it.
+                        if j == 0 and seg_text_slice.count(" ") < 2:
+                            continue
+                        if has_user_identity:
+                            self._set_current_speaker(self.config.user_identity)
+                        self.sequence += f" {seg_text_slice}"
+                        sequence_changed = True
+                        seg_text = seg_text[next_slice_idx:].lstrip()
                 utterances_after_partial_pos.clear()
                 # any remaining text in the new segment is appended to the end of the sequence
                 if seg_text:
@@ -113,9 +125,9 @@ class Test:
 
 if __name__ == "__main__":
     current_speaker = "S2"
-    sequence = "because I've been getting a lot S1: alright yeah I said S2: yeah? S1: come over S2: alright."
-    partial_pos = 79
-    input = "~come over ~come over to *"
+    sequence = "... S1: The quick brown S2: I don't"
+    partial_pos = 3
+    input = "*The quick brown fox"
 
     test = Test(current_speaker, sequence, partial_pos)
     sequence_changed = test._update_sequence_from_input(input)
