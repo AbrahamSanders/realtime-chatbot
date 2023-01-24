@@ -3,18 +3,25 @@ from fairseq.models.text_to_speech.hub_interface import TTSHubInterface
 import g2p_en
 import torch
 import re
-from typing import Optional
 from time import sleep
 
 from .utils import queue_helpers, audio_helpers
 from .speech_enhancer import SpeechEnhancer
+from .tts_overrides import (
+    get_phonemize_override, get_get_prediction_override, 
+    get_generate_override, get_encoder_forward_override
+)
 
 class TTSConfig:
-    def __init__(self, buffer_size=4, downsampling_factor=1, speaker=0, enhancement_model="none"):
+    def __init__(self, buffer_size=4, downsampling_factor=1, speaker=0, enhancement_model="none",
+                 duration_factor=1.0, pitch_factor=1.0, energy_factor=1.0):
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
         self.speaker = speaker
         self.enhancement_model = enhancement_model
+        self.duration_factor = duration_factor
+        self.pitch_factor = pitch_factor
+        self.energy_factor = energy_factor
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -45,31 +52,15 @@ class TTSHandlerMultiprocessing:
     def is_running(self):
         return self.running.value
 
-    def tts_phonemize(
-        self,
-        text: str,
-        lang: Optional[str],
-        phonemizer: Optional[str] = None,
-        preserve_punct: bool = False,
-        to_simplified_zh: bool = False,
-    ):
-        if preserve_punct:
-            return " ".join("|" if p == " " else p for p in self.g2p(text))
-        else:
-            res = [{",": "sp", ";": "sp"}.get(p, p) for p in self.g2p(text)]
-            return " ".join(p for p in res if p.isalnum())
-
     def sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "", text)
         text = re.sub(r"(?:\s|\A)[hx]+(?=(?:\s|\Z))", "", text)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
-        text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha!", text)
+        text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha! ha!", text)
         text = re.sub(r"&=.+?(?=(?:\s|\Z))", "", text)
         text = re.sub("yeah[.!?]*", "yeah,", text)
-        text = re.sub("hm+", "hm hm.", text)
-        text = re.sub("um+", "um,", text)
         text = re.sub(" {2,}", " ", text)
         text = text.strip()
         return text
@@ -79,17 +70,20 @@ class TTSHandlerMultiprocessing:
             config = TTSConfig()
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.g2p = g2p_en.G2p()
-        TTSHubInterface.phonemize = self.tts_phonemize
+        g2p = g2p_en.G2p()
+        TTSHubInterface.phonemize = get_phonemize_override(TTSHubInterface, g2p)
+        TTSHubInterface.get_prediction = get_get_prediction_override(TTSHubInterface)
         models, cfg, tts_task = load_model_ensemble_and_task_from_hf_hub(
             #"facebook/fastspeech2-en-ljspeech",
             "facebook/fastspeech2-en-200_speaker-cv4",
             arg_overrides={"vocoder": "hifigan", "fp16": False}
         )
         tts_model = models[0].to(device)
+        tts_model.encoder.forward = get_encoder_forward_override(tts_model.encoder)
         TTSHubInterface.update_cfg_with_data_cfg(cfg, tts_task.data_cfg)
         tts_generator = tts_task.build_generator(models, cfg)
         tts_generator.vocoder = tts_generator.vocoder.to(device)
+        tts_generator.generate = get_generate_override(tts_generator)
         speech_enhancer = SpeechEnhancer(device=device)
         cached_resample = None
         input_buffer = []
@@ -132,7 +126,14 @@ class TTSHandlerMultiprocessing:
                         if sample["speaker"] is not None:
                             sample["speaker"] = sample["speaker"].to(device)
                         
-                        wav, rate = TTSHubInterface.get_prediction(tts_task, tts_model, tts_generator, sample)
+                        d_factor = torch.ones_like(sample["net_input"]["src_tokens"], dtype=torch.float32)
+                        #d_factor[:, 1] *= config.duration_factor
+                        p_factor = torch.ones_like(d_factor)
+                        #p_factor[:, 1] *= config.pitch_factor
+                        wav, rate = TTSHubInterface.get_prediction(
+                            tts_task, tts_model, tts_generator, sample, d_factor=d_factor, 
+                            p_factor=p_factor, e_factor=config.energy_factor
+                        )
 
                         # downsample & enhance (if selected)
                         new_rate = rate // config.downsampling_factor

@@ -10,22 +10,37 @@ from realtime_chatbot.speech_enhancer import SpeechEnhancer
 tts_handler = None
 speech_enhancer = None
 
-def _synthesize_handler(text):
-    tts_handler.queue_input(text)
-    start = datetime.now()
-    while True:
-        output = tts_handler.next_output()
-        if output:
-            return output
-        if (datetime.now()-start).total_seconds() > 10:
-            return None
-        sleep(0.001)
+def _synthesize_handler(text, buffer_size):
+    text_parts = text.split("|")
+    audio_parts = []
+    for i, part in enumerate(text_parts):
+        tts_handler.queue_input(part)
+        if (i+1) % buffer_size == 0 or i == len(text_parts)-1:
+            if i == len(text_parts)-1:
+                while (i+1) % buffer_size > 0:
+                    tts_handler.queue_input("")
+                    i += 1
+            start = datetime.now()
+            output = None
+            while output is None:
+                output = tts_handler.next_output()
+                if (datetime.now()-start).total_seconds() > 10:
+                    break
+                sleep(0.001)
+            if output is not None:
+                audio_parts.append(output)
+    return audio_parts
+    
 
-def process_text(text, voice, downsample_factor):
-    tts_handler.queue_config(TTSConfig(buffer_size=1, speaker=voice))
-    audio = _synthesize_handler(text)
 
-    wav_tensor, sr = audio_helpers.concat_audios_to_tensor([audio])
+def process_text(text, buffer_size, voice, downsample_factor, duration_factor, pitch_factor, energy_factor):
+    tts_handler.queue_config(TTSConfig(buffer_size=buffer_size, speaker=voice, duration_factor=duration_factor, 
+                                       pitch_factor=pitch_factor, energy_factor=energy_factor))
+    audio_parts = _synthesize_handler(text, buffer_size)
+    if not audio_parts:
+        return None, None, None, None, None
+
+    wav_tensor, sr = audio_helpers.concat_audios_to_tensor(audio_parts)
 
     sr_downsample = sr // downsample_factor
     wav_downsample, _ = audio_helpers.downsample(wav_tensor, sr, sr_downsample)
@@ -59,12 +74,16 @@ if __name__ == "__main__":
         fn=process_text,
         inputs=[
             "text",
+            gr.Slider(1, 5, value=1, step=1),
             gr.Dropdown(
                 type="index",
                 choices=[f"Voice {i+1}" for i in range(200)],
                 value="Voice 16", label="Voice"
             ),
-            gr.Slider(1, 6, value=1, step=1)
+            gr.Slider(1, 6, value=1, step=1),
+            gr.Slider(-5, 5, value=1, step=0.1),
+            gr.Slider(-5, 5, value=1, step=0.1),
+            gr.Slider(-5, 5, value=1, step=0.1)
         ], 
         outputs=[
             gr.Audio(label="Control"),
