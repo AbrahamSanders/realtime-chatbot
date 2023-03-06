@@ -48,7 +48,6 @@ from transformers import (
     HfArgumentParser,
     Trainer,
     TrainingArguments,
-    DataCollatorWithPadding,
     is_torch_tpu_available,
     set_seed,
 )
@@ -57,15 +56,10 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-
-class DataCollatorWithPaddingAndLabels(DataCollatorWithPadding):
-    def __init__(self, args, **kwargs):
-        super().__init__(args, **kwargs)
-    
-    def __call__(self, features):
-        batch = super().__call__(features)
-        batch["labels"] = batch["input_ids"]
-        return batch
+from realtime_chatbot.utils.training_helpers import (
+    DataCollatorWithPaddingAndLabels,
+    AnchoredDistillingTrainer
+)
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.24.0")
@@ -132,6 +126,43 @@ class ModelArguments:
                 "with private models)."
             )
         },
+    )
+    use_anchor_model: bool = field(
+        default=False,
+        metadata={
+            "help": "Use an anchor model (frozen copy of original pre-trained model) for anchored fine tuning."
+        }
+    )
+    token_anchor_weighting: str = field(
+        default="none",
+        metadata={
+            "help": "Token weighting scheme for anchoring losses. Supported options: "
+                    "['none', 'inv_entr', 'inv_exp_entr', 'sigmoid_neg_entr']"
+        }
+    )
+    token_entr_temperature: float = field(
+        default=0.3,
+        metadata={
+            "help": "Temperature to apply to logits when computing token entropy for token anchor weighting."
+        }
+    )
+    anchor_loss_weight: float = field(
+        default=5.0,
+        metadata={
+            "help": "Coefficient that scales the anchor (MSE or KLDiv) loss."
+        }
+    )
+    lm_loss_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": "Coefficient that scales the LM (crossentropy) loss"
+        }
+    )
+    embed_cosine_loss_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": "Coefficient that scales the hidden state (cosine similarity) loss"
+        }
     )
 
     def __post_init__(self):
@@ -392,20 +423,29 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     if model_args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+        n_models = 2 if model_args.use_anchor_model else 1
+        models = (
+            AutoModelForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+            ) for _ in range(n_models))
+        if model_args.use_anchor_model:
+            model, anchor_model = models
+        else:
+            model, = models
     else:
         model = AutoModelForCausalLM.from_config(config)
         n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
+    anchor_logits_dimension = len(tokenizer)
     model.resize_token_embeddings(len(tokenizer))
+    if model_args.use_anchor_model:
+        anchor_model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -531,19 +571,33 @@ def main():
             return metric.compute(predictions=preds, references=labels)
 
     # Initialize our Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
+    trainer_kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_dataset if training_args.do_train else None,
+        "eval_dataset": eval_dataset if training_args.do_eval else None,
+        "tokenizer": tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
-        data_collator=DataCollatorWithPaddingAndLabels(tokenizer),
-        compute_metrics=compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
-        preprocess_logits_for_metrics=preprocess_logits_for_metrics
-        if training_args.do_eval and not is_torch_tpu_available()
-        else None,
-    )
+        "data_collator": DataCollatorWithPaddingAndLabels(tokenizer),
+        "compute_metrics": compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
+        "preprocess_logits_for_metrics": preprocess_logits_for_metrics if training_args.do_eval and not is_torch_tpu_available() else None
+    }
+
+    if model_args.use_anchor_model:
+        print(f"Using AnchoredDistillingTrainer (anchor_loss_weight={model_args.anchor_loss_weight}; "
+              f"lm_loss_weight={model_args.lm_loss_weight}; embed_cosine_loss_weight={model_args.embed_cosine_loss_weight})...")
+        trainer = AnchoredDistillingTrainer(
+            anchor_model,
+            anchor_logits_dimension,
+            anchor_loss_weight=model_args.anchor_loss_weight,
+            lm_loss_weight=model_args.lm_loss_weight,
+            embed_cosine_loss_weight=model_args.embed_cosine_loss_weight,
+            token_anchor_weighting=model_args.token_anchor_weighting,
+            token_entr_temperature=model_args.token_entr_temperature,
+            **trainer_kwargs
+        )
+    else:
+        trainer = Trainer(**trainer_kwargs)
 
     # Training
     if training_args.do_train:

@@ -1,5 +1,5 @@
 python train.py \
-    --model_name_or_path=facebook/opt-2.7b \
+    --model_name_or_path=facebook/opt-1.3b \
     --no_use_fast_tokenizer \
     --train_file=data/dataset_train.txt \
     --validation_file=data/dataset_dev.txt \
@@ -7,7 +7,7 @@ python train.py \
     --per_device_eval_batch_size=1 \
     --do_train \
     --gradient_accumulation_steps=4 \
-    --output_dir=rtchat-2.7b \
+    --output_dir=rtchat-1.3b \
     --do_eval \
     --overwrite_output_dir \
     --seed=42 \
@@ -24,8 +24,6 @@ python train.py \
     --metric_for_best_model=eval_loss \
     --load_best_model_at_end \
     --dataloader_drop_last \
-    --gradient_checkpointing \
     --use_anchor_model \
-    --anchor_loss_weight=5.0 \
-    --lm_loss_weight=1.0 \
-    --token_anchor_weighting=sigmoid_neg_entr
+    --anchor_loss_weight=1.0 \
+    --lm_loss_weight=1.0
