@@ -19,7 +19,8 @@ class RealtimeAgentGradioInterface:
         )
         self.agent = RealtimeAgentMultiprocessing(
             wait_until_running=False,
-            config=RealtimeAgentConfig(random_state=self.args.random_state),
+            config=RealtimeAgentConfig(random_state=self.args.random_state, 
+                                       prevent_special_token_generation=self.args.prevent_special_token_generation),
             modelpath=self.args.agent_modelpath,
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
@@ -54,7 +55,7 @@ class RealtimeAgentGradioInterface:
                 dialogue_unflattened[-1][1] += utt
         return dialogue_unflattened
 
-    def execute(self, state, audio, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
+    def execute(self, state, audio, summary, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
                 asr_max_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
                 user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
@@ -68,7 +69,7 @@ class RealtimeAgentGradioInterface:
         agent_config = RealtimeAgentConfig(interval=agent_interval, identities={
             "S1": Identity(user_name, user_age, user_sex),
             "S2": Identity(agent_name, agent_age, agent_sex)
-        }, random_state=self.args.random_state)
+        }, random_state=self.args.random_state, summary=summary)
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
@@ -152,6 +153,7 @@ class RealtimeAgentGradioInterface:
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
         reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)",
                                    elem_id="reset_button")
+        summary_textbox = gr.inputs.Textbox(label="Dialogue Summary")
         
         state = gr.State({
             "dialogue": [], 
@@ -165,6 +167,7 @@ class RealtimeAgentGradioInterface:
             inputs=[
                 state,
                 gr.Audio(source="microphone", streaming=True, label="ASR Input"),
+                summary_textbox,
                 reset_button,
                 agent_interval_slider,
                 tts_downsampling_factor_slider,
@@ -198,6 +201,8 @@ class RealtimeAgentGradioInterface:
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
+    parser.add_argument("--prevent-special-token-generation", action="store_true",
+                        help="Use with base OPT model for zero-shot inference. (default: %(default)s)")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")

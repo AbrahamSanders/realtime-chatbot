@@ -27,7 +27,8 @@ class RealtimeAgent_Resources:
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.6, max_history_words=100, max_agent_pause_duration=10.0, random_state=None):
+                 interval=0.6, max_history_words=100, max_agent_pause_duration=10.0, 
+                 random_state=None, prevent_special_token_generation=False, summary=None):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -37,6 +38,8 @@ class RealtimeAgentConfig:
         self.max_history_words = max_history_words
         self.max_agent_pause_duration = max_agent_pause_duration
         self.random_state = random_state
+        self.prevent_special_token_generation = prevent_special_token_generation
+        self.summary = summary
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -56,17 +59,34 @@ class RealtimeAgent:
               and hasattr(self.resources.model.config, "max_position_embeddings"):
             self.tokenizer_max_length = self.resources.model.config.max_position_embeddings
 
+        #self.generate_kwargs = {
+        #    "pad_token_id": self.resources.tokenizer.pad_token_id,
+        #    "eos_token_id": self.resources.tokenizer.eos_token_id,
+        #    "max_new_tokens": 10,
+        #    "do_sample": True,
+        #    "top_p": 0.9,
+        #    "top_k": 70,
+        #    "temperature": 1.8,
+        #    "num_beams": 2
+        #}
+
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
             "max_new_tokens": 10,
-            "do_sample": True,
-            "top_p": 0.9,
-            "top_k": 70,
-            "temperature": 1.8,
-            "num_beams": 2,
-            "early_stopping": True
+            "penalty_alpha": 0.45,
+            "top_k": 15
         }
+        if self.config.prevent_special_token_generation:
+            bad_words_ids = self.resources.tokenizer(["\n",
+                "dialog", " dialog", "Dialog", " Dialog",
+                "dialogue", " dialogue", "Dialogue", " Dialogue"
+                "<participant>", "<dialog>", "<dialogue>", "<summary>", 
+                " <participant>", " <dialog>", " <dialogue>", " <summary>",
+                "</participant>", "</dialog>", "</dialogue>", "</summary>", 
+                " </participant>", " </dialog>", " </dialogue>", " </summary>"], 
+                add_prefix_space=False, add_special_tokens=False).input_ids
+            self.generate_kwargs["bad_words_ids"] = bad_words_ids
 
         self.any_identity_regex = re.compile(r"S\d+?")
         self.any_identity_with_incomplete_regex = re.compile(rf" (?:{self.any_identity_regex.pattern}|S\Z)")
@@ -165,6 +185,8 @@ class RealtimeAgent:
         prefix = ""
         for identity, info in self.config.identities.items():
             prefix += f"<participant> {identity} (name: {info.name}, age: {info.age}, sex: {info.sex}) "
+        if self.config.summary:
+            prefix += f"<summary> {self.config.summary} "
         prefix += "<dialog>"
         prev_prefix_length = None
         if len(self.sequence) > 0 and self.prefix_length is not None:
