@@ -1,9 +1,13 @@
 import pylangacq
 import re
+import torch
+import math
 from tqdm import tqdm
+from transformers import AutoTokenizer, pipeline
 
 class TalkbankDataLoader:
-    def __init__(self, max_utterance_words=150, max_history_words=500, min_overlap_words=100):
+    def __init__(self, max_utterance_words=150, max_history_words=500, min_overlap_words=100, 
+                 summarization_modelname=None):
         self.max_utterance_words = max_utterance_words
         self.max_history_words = max_history_words
         self.min_overlap_words = min_overlap_words
@@ -17,6 +21,18 @@ class TalkbankDataLoader:
             "MICASE": "https://ca.talkbank.org/data/MICASE.zip",
             "SCoSE": "https://ca.talkbank.org/data/SCoSE.zip"
         }
+        self.summ_model = None
+        if summarization_modelname is not None:
+            summ_tokenizer = AutoTokenizer.from_pretrained(summarization_modelname)
+            summ_tokenizer.truncation_side = "left"
+            self.summ_model = pipeline(
+                "summarization", 
+                model=summarization_modelname, 
+                tokenizer=summ_tokenizer,
+                return_text=True,
+                device = 0 if torch.cuda.is_available() else -1
+            )
+            
     
     def clean_line(self, line):
         # convert 'hello [!]' to 'hello!'
@@ -110,6 +126,21 @@ class TalkbankDataLoader:
         utts_str = " ".join(cleaned_utts)
         return utts_str, next_start
     
+    def prepare_utterances_for_summary(self, utts_str):
+        # remove breathing or unintelligibility annotations (e.g., hhh, xxx)
+        utts_str = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", utts_str)
+        # remove pauses
+        utts_str = re.sub(r"\(\d*?\.\d*?\)", "", utts_str)
+        # remove ':' speech emphasis annotations
+        utts_str = re.sub(r"(?<=[^\d]):", "", utts_str)
+        # remove empty utterances (that are now empty because of the above rules)
+        utts_str = re.sub(r"S\d+?:\s*?(?=S\d+?:)", "", utts_str)
+        # normalize spaces
+        utts_str = re.sub(" {2,}", " ", utts_str)
+        # put utterances on their own lines
+        utts_str = re.sub(r"\s(?=S\d+?:)", "\n", utts_str)
+        return utts_str
+
     def load_data(self, corpora="All", exclude=None):
         if isinstance(corpora, str):
             if corpora == "All":
@@ -138,4 +169,11 @@ class TalkbankDataLoader:
                 while start is not None:
                     utts_str, start = self.get_utterances_str(utterances, part_map, start)
                     if len(utts_str) > 0:
+                        if self.summ_model is not None:
+                            utts_str_for_summary = self.prepare_utterances_for_summary(utts_str)
+                            summary_max_length = max(self.summ_model.model.config.max_length, 
+                                                     math.ceil(len(utts_str_for_summary.split()) / 4))
+                            summary = self.summ_model(utts_str_for_summary, max_length=summary_max_length, truncation=True)
+                            summary = summary[0]["summary_text"]
+                            prefix = f"{part_str} <summary> {summary} <dialog> "
                         yield f"{prefix}{utts_str}"

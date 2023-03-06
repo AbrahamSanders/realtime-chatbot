@@ -54,7 +54,7 @@ class TTSHandlerMultiprocessing:
 
     def sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "", text)
-        text = re.sub(r"(?:\s|\A)[hx]+(?=(?:\s|\Z))", "", text)
+        text = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", text)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
