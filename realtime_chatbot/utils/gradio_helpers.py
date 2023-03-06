@@ -5,9 +5,10 @@ def get_audio_html(reset_elem_id, audio_elem_id):
             function checkAudio() {{
                 try {{
                     var ce = window.parent.document.getElementsByTagName("gradio-app")[0];
-                    var reset = ce.shadowRoot.getElementById("{reset_elem_id}").querySelector("input");
+                    var ce_dom = ce.shadowRoot ?? window.parent.document;
+                    var reset = ce_dom.getElementById("{reset_elem_id}").querySelector("input");
                     if (!(reset && reset.checked)) {{
-                        var audio = ce.shadowRoot.getElementById("{audio_elem_id}").querySelector("audio");
+                        var audio = ce_dom.getElementById("{audio_elem_id}").querySelector("audio");
                         if (audio && audio.src !== lastSrc) {{
                             lastSrc = audio.src;
                             var audio_clone = audio.cloneNode();

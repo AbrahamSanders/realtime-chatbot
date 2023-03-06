@@ -1,6 +1,6 @@
 fairseq
 g2p-en
-gradio
+gradio>=3.11,<3.17
 numpy>=1.20.0
 pylangacq
 scikit-learn
@@ -10,4 +10,4 @@ torch
 torchaudio
 tqdm
 transformers>=4.24.0
-whisper @ git+https://github.com/openai/whisper.git
+openai-whisper
