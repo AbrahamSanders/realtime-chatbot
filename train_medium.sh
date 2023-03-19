@@ -25,5 +25,9 @@ python train.py \
     --load_best_model_at_end \
     --dataloader_drop_last \
     --use_anchor_model \
-    --anchor_loss_weight=1.0 \
-    --lm_loss_weight=1.0
+    --anchor_loss_weight=5.0 \
+    --kl_div_temperature=1.0 \
+    --lm_loss_weight=1.5 \
+    --use_token_anchor_loss_weighting \
+    --use_token_lm_loss_weighting \
+    --lm_loss_sigmoid_coeff=2.0

@@ -27,5 +27,8 @@ python train.py \
     --gradient_checkpointing \
     --use_anchor_model \
     --anchor_loss_weight=5.0 \
-    --lm_loss_weight=1.0 \
-    --token_anchor_weighting=sigmoid_neg_entr
+    --kl_div_temperature=1.0 \
+    --lm_loss_weight=1.5 \
+    --use_token_anchor_loss_weighting \
+    --use_token_lm_loss_weighting \
+    --lm_loss_sigmoid_coeff=2.0

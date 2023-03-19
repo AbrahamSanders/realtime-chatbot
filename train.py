@@ -133,17 +133,28 @@ class ModelArguments:
             "help": "Use an anchor model (frozen copy of original pre-trained model) for anchored fine tuning."
         }
     )
-    token_anchor_weighting: str = field(
-        default="none",
+    kl_div_temperature: float = field(
+        default=2.0,
         metadata={
-            "help": "Token weighting scheme for anchoring losses. Supported options: "
-                    "['none', 'inv_entr', 'inv_exp_entr', 'sigmoid_neg_entr']"
+            "help": "Temperature to divide anchor and LM logits by before computing the KL divergence distillation loss."
         }
     )
-    token_entr_temperature: float = field(
-        default=0.3,
+    use_token_anchor_loss_weighting: bool = field(
+        default=False,
         metadata={
-            "help": "Temperature to apply to logits when computing token entropy for token anchor weighting."
+            "help": "Use token-level weights for the anchor losses (KL divergence + cosine similarity)."
+        }
+    )
+    use_token_lm_loss_weighting: bool = field(
+        default=False,
+        metadata={
+            "help": "Use token-level weights for supervised LM loss (crossentropy)."
+        }
+    )
+    lm_loss_sigmoid_coeff: float = field(
+        default=2.0,
+        metadata={
+            "help": "Sigmoid coefficient for token-level LM loss weighting"
         }
     )
     anchor_loss_weight: float = field(
@@ -232,7 +243,7 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     keep_linebreaks: bool = field(
-        default=True, metadata={"help": "Whether to keep line breaks when using TXT files or not."}
+        default=False, metadata={"help": "Whether to keep line breaks when using TXT files or not."}
     )
 
     def __post_init__(self):
@@ -584,16 +595,22 @@ def main():
     }
 
     if model_args.use_anchor_model:
-        print(f"Using AnchoredDistillingTrainer (anchor_loss_weight={model_args.anchor_loss_weight}; "
-              f"lm_loss_weight={model_args.lm_loss_weight}; embed_cosine_loss_weight={model_args.embed_cosine_loss_weight})...")
+        print("Using AnchoredDistillingTrainer "
+                f"(anchor_loss_weight={model_args.anchor_loss_weight}; kl_div_temperature={model_args.kl_div_temperature}; "
+                f"lm_loss_weight={model_args.lm_loss_weight}; embed_cosine_loss_weight={model_args.embed_cosine_loss_weight}; "
+                f"use_token_anchor_loss_weighting={model_args.use_token_anchor_loss_weighting}; "
+                f"use_token_lm_loss_weighting={model_args.use_token_lm_loss_weighting}; "
+                f"lm_loss_sigmoid_coeff={model_args.lm_loss_sigmoid_coeff})...")
         trainer = AnchoredDistillingTrainer(
             anchor_model,
             anchor_logits_dimension,
             anchor_loss_weight=model_args.anchor_loss_weight,
+            kl_div_temperature=model_args.kl_div_temperature,
             lm_loss_weight=model_args.lm_loss_weight,
             embed_cosine_loss_weight=model_args.embed_cosine_loss_weight,
-            token_anchor_weighting=model_args.token_anchor_weighting,
-            token_entr_temperature=model_args.token_entr_temperature,
+            use_token_anchor_loss_weighting=model_args.use_token_anchor_loss_weighting,
+            use_token_lm_loss_weighting=model_args.use_token_lm_loss_weighting,
+            lm_loss_sigmoid_coeff=model_args.lm_loss_sigmoid_coeff,
             **trainer_kwargs
         )
     else:
