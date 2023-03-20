@@ -8,6 +8,7 @@ from datetime import datetime
 
 from .identity import Identity
 from .utils import queue_helpers
+from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
     def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat", device=None):
@@ -21,6 +22,9 @@ class RealtimeAgent_Resources:
         # Model
         self.model = AutoModelForCausalLM.from_pretrained(modelpath)
         self.model = self.model.to(self.device)
+
+        allow_degeneration_token_ids = [self.tokenizer.encode(t, add_special_tokens=False)[0] for t in [" S"]]
+        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.0, 0.7, allow_degeneration_token_ids, 0.7)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
@@ -74,8 +78,8 @@ class RealtimeAgent:
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
             "max_new_tokens": 10,
-            "penalty_alpha": 0.45,
-            "top_k": 15
+            "penalty_alpha": 0.5, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
+            "top_k": 10
         }
         if self.config.prevent_special_token_generation:
             bad_words_ids = self.resources.tokenizer(["\n",
