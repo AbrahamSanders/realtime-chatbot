@@ -3,7 +3,7 @@ import torch.distributed as dist
 from torch import nn
 from torch.special import entr
 from typing import Optional, Union, List
-from transformers.generation import LogitsProcessorList, StoppingCriteriaList
+from transformers.generation import LogitsProcessorList, StoppingCriteriaList, LogitsWarper
 from transformers.generation.utils import (
     ContrastiveSearchOutput, 
     ContrastiveSearchDecoderOnlyOutput, 
@@ -12,6 +12,44 @@ from transformers.generation.utils import (
     CausalLMOutputWithPast
 )
 
+class TopPProbsWarper(LogitsWarper):
+    """
+    [`LogitsWarper`] that performs top-p, i.e. restricting to top tokens summing to prob_cut_off <= prob_cut_off.
+
+    Args:
+        top_p (`float`):
+            If set to < 1, only the smallest set of most probable tokens with probabilities that add up to `top_p` or
+            higher are kept for generation.
+        filter_value (`float`, *optional*, defaults to `-float("Inf")`):
+            All filtered values will be set to this float value.
+        min_tokens_to_keep (`int`, *optional*, defaults to 1):
+            Minimum number of tokens that cannot be filtered.
+    """
+
+    def __init__(self, top_p: float, filter_value: float = 0.0, min_tokens_to_keep: int = 1):
+        top_p = float(top_p)
+        if top_p < 0 or top_p > 1.0:
+            raise ValueError(f"`top_p` has to be a float > 0 and < 1, but is {top_p}")
+
+        self.top_p = top_p
+        self.filter_value = filter_value
+        self.min_tokens_to_keep = min_tokens_to_keep
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        sorted_probs, sorted_indices = torch.sort(scores, descending=False)
+        cumulative_probs = sorted_probs.cumsum(dim=-1)
+
+        # Remove tokens with cumulative top_p above the threshold (token with 0 are kept)
+        sorted_indices_to_remove = cumulative_probs <= (1 - self.top_p)
+        if self.min_tokens_to_keep > 1:
+            # Keep at least min_tokens_to_keep
+            sorted_indices_to_remove[..., -self.min_tokens_to_keep :] = 0
+
+        # scatter sorted tensors to original indexing
+        indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+        scores = scores.masked_fill(indices_to_remove, self.filter_value)
+        return scores
+
 def _ranking_fast(
     context_hidden: torch.FloatTensor,
     next_hidden: torch.FloatTensor,
@@ -19,12 +57,15 @@ def _ranking_fast(
     alpha: float,
     beam_width: int,
     penalty_mask: torch.FloatTensor,
+    do_sample: bool
 ) -> torch.FloatTensor:
     """
     Reranks the top_k candidates based on a degeneration penalty (cosine similarity with previous tokens), as described
     in the paper "A Contrastive Framework for Neural Text Generation". Returns the index of the best candidate for each
     row in the batch.
     """
+    if do_sample:
+        zero_probs = next_top_k_probs == 0.0
     norm_context_hidden = context_hidden / context_hidden.norm(dim=2, keepdim=True)
     norm_next_hidden = next_hidden / next_hidden.norm(dim=2, keepdim=True)
     cosine_matrix = torch.matmul(norm_context_hidden, norm_next_hidden.transpose(1, 2)).squeeze(-1)  # [B*K, S]
@@ -32,10 +73,17 @@ def _ranking_fast(
     next_top_k_probs = next_top_k_probs.view(-1)  # [B*K]
     contrastive_score = (1.0 - alpha) * next_top_k_probs - alpha * degeneration_penalty * penalty_mask.view(-1)
     contrastive_score = torch.stack(torch.split(contrastive_score, beam_width))  # [B, K]
-    _, selected_idx = contrastive_score.max(dim=-1)  # [B]
+    if do_sample:
+        contrastive_score[zero_probs] = -1 #-float("Inf")
+        #sampling_weights = nn.functional.softmax(contrastive_score, dim=-1)
+        sampling_weights = (1+contrastive_score) / (1+contrastive_score).sum(dim=-1, keepdim=True)
+        selected_idx = torch.multinomial(sampling_weights, num_samples=1).squeeze(-1)
+    else:
+        _, selected_idx = contrastive_score.max(dim=-1)  # [B]
     return selected_idx
 
-def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, allow_degeneration_token_ids=None, allow_coeff=0.0):
+def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, allow_degeneration_token_ids=None, allow_coeff=0.0, 
+                                    sample_top_p=0.0, sample_temperature=1.0):
 
     max_penalty_alpha = max(min_penalty_alpha, max_penalty_alpha)
 
@@ -168,6 +216,11 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
         this_peer_finished = False  # used by synced_gpus only
         batch_size = input_ids.shape[0]
 
+        do_sample = False
+        if sample_top_p > 0.0:
+            top_p_probs_warper = TopPProbsWarper(sample_top_p)
+            do_sample = True
+
         while True:
             if synced_gpus:
                 # Under synced_gpus the `forward` call must continue until all gpus complete their sequence.
@@ -234,15 +287,22 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             logit_for_next_step = logits_processor(input_ids, logit_for_next_step)
             logit_for_next_step = logits_warper(input_ids, logit_for_next_step)
-            next_probs = nn.functional.softmax(logit_for_next_step, dim=-1)
+            next_probs = nn.functional.softmax(logit_for_next_step / sample_temperature, dim=-1)
+            #if do_sample:
+            #    top_k_logits, top_k_ids = torch.topk(logit_for_next_step, dim=-1, k=top_k)
+            #    top_k_top_p_logits = top_p_logits_warper(None, top_k_logits / sample_temperature)
+            #    top_k_probs = nn.functional.softmax(top_k_top_p_logits, dim=-1)
+            #else:
             top_k_probs, top_k_ids = torch.topk(next_probs, dim=-1, k=top_k)
-
+            if do_sample:
+                top_k_probs = top_p_probs_warper(None, top_k_probs)
+            
             # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
             if min_penalty_alpha != max_penalty_alpha:
-                next_entropy = entr(next_probs).sum(dim=-1)
-                next_expected_prob = torch.exp(-next_entropy)
+                #next_entropy = entr(next_probs).sum(dim=-1)
+                next_expected_prob = (next_probs ** 2).sum(dim=-1)
                 # See: https://www.desmos.com/calculator/bcavepe4bw
-                penalty_alpha = min_penalty_alpha + (max_penalty_alpha-min_penalty_alpha) * (1-next_expected_prob.item()) ** 4
+                penalty_alpha = min_penalty_alpha + (max_penalty_alpha-min_penalty_alpha) * (1-next_expected_prob.item())# ** 2
             else:
                 penalty_alpha = min_penalty_alpha
 
@@ -301,7 +361,7 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             # compute the degeneration penalty and re-rank the candidates based on the degeneration penalty and the
             # model confidence
-            selected_idx = _ranking_fast(context_hidden, next_hidden, top_k_probs, penalty_alpha, top_k, penalty_mask)
+            selected_idx = _ranking_fast(context_hidden, next_hidden, top_k_probs, penalty_alpha, top_k, penalty_mask, do_sample)
 
             # prepare for the next step: (1) next token_id; (2) past_key_values; (3) last_hidden_states for computing
             # the degeneration penalty; (4) logits for selecting next top-k candidates; (5) selected tokens scores

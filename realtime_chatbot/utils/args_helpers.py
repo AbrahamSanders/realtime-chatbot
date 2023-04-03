@@ -6,4 +6,8 @@ def get_common_arg_parser():
                         help="Path to to the HuggingFace transformers model to use for the agent. (default: %(default)s)")
     parser.add_argument("--random-state", type=int, default=None,
                         help="Random seed for model reproducibility. (default: %(default)s)")
+    parser.add_argument("--prevent-special-token-generation", action="store_true",
+                        help="Use with base OPT model for zero-shot inference. (default: %(default)s)")
+    parser.add_argument("--add-special-pause-token", action="store_true",
+                        help="Add special <p> token when incrementing pauses. (default: %(default)s)")
     return parser

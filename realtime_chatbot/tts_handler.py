@@ -36,7 +36,7 @@ class TTSHandlerMultiprocessing:
         self.output_queue = ctx.Queue()
         self.running = ctx.Value(c_bool, False)
 
-        self.pause_regex = re.compile(r"\(\d*?\.\d*?\)")
+        self.pause_regex = re.compile(r"(?:<p> )?\(\d*?\.\d*?\)")
 
         self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
@@ -54,13 +54,13 @@ class TTSHandlerMultiprocessing:
 
     def sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "", text)
-        text = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", text)
+        text = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
-        text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha! ha!", text)
+        text = re.sub(r"&=laugh.*?(?=(?:\s|\Z))", "ha! ha! ha!", text, flags=re.IGNORECASE)
         text = re.sub(r"&=.+?(?=(?:\s|\Z))", "", text)
-        text = re.sub("yeah[.!?]*", "yeah,", text)
+        text = re.sub("yeah[.!?]*", "yeah,", text, flags=re.IGNORECASE)
         text = re.sub(" {2,}", " ", text)
         text = text.strip()
         return text
@@ -76,7 +76,7 @@ class TTSHandlerMultiprocessing:
         models, cfg, tts_task = load_model_ensemble_and_task_from_hf_hub(
             #"facebook/fastspeech2-en-ljspeech",
             "facebook/fastspeech2-en-200_speaker-cv4",
-            arg_overrides={"vocoder": "hifigan", "fp16": False}
+            arg_overrides={"vocoder": "hifigan", "fp16": True}
         )
         tts_model = models[0].to(device)
         tts_model.encoder.forward = get_encoder_forward_override(tts_model.encoder)

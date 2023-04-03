@@ -8,6 +8,8 @@ def main():
     parser = argparse.ArgumentParser("Prepare the training dataset")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--corpora", default="All")
+    parser.add_argument("--standardize-pauses", action="store_true")
+    parser.add_argument("--add-special-pause-token", action="store_true")
     parser.add_argument("--summarization-modelname", default="lidiya/bart-large-xsum-samsum")
     parser.add_argument("--test-proportion", type=float, default=0.1)
     parser.add_argument("--dev-proportion", type=float, default=0.1)
@@ -17,7 +19,12 @@ def main():
     if args.summarization_modelname == "None":
         args.summarization_modelname = None
     
-    loader = TalkbankDataLoader(summarization_modelname=args.summarization_modelname)
+    loader = TalkbankDataLoader(
+        standardize_pauses=args.standardize_pauses, 
+        add_special_pause_token=args.add_special_pause_token,
+        summarization_modelname=args.summarization_modelname, 
+        random_state=args.seed
+    )
     examples = list(loader.load_data(corpora=args.corpora, exclude="MICASE.+?(?:lab500su044|ofc301mu021)"))
     
     train_examples, test_examples = train_test_split(examples, test_size=args.test_proportion, random_state=args.seed)

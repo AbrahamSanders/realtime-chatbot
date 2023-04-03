@@ -11,7 +11,7 @@ from .utils import queue_helpers
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat", device=None):
+    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat", device=None, use_fp16=True):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
@@ -20,19 +20,23 @@ class RealtimeAgent_Resources:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         # Model
-        self.model = AutoModelForCausalLM.from_pretrained(modelpath)
+        if use_fp16:
+            self.model = AutoModelForCausalLM.from_pretrained(modelpath, torch_dtype=torch.float16)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(modelpath)
+
         self.model = self.model.to(self.device)
 
-        allow_degeneration_token_ids = [self.tokenizer.encode(t, add_special_tokens=False)[0] for t in [" S"]]
-        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.0, 0.7, allow_degeneration_token_ids, 0.7)
+        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.0, 1.0, sample_top_p=0.825)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.6, max_history_words=100, max_agent_pause_duration=10.0, 
-                 random_state=None, prevent_special_token_generation=False, summary=None):
+                 interval=0.7, max_history_words=100, max_agent_pause_duration=10.0, 
+                 random_state=None, prevent_special_token_generation=False, summary=None,
+                 add_special_pause_token=False):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -44,6 +48,7 @@ class RealtimeAgentConfig:
         self.random_state = random_state
         self.prevent_special_token_generation = prevent_special_token_generation
         self.summary = summary
+        self.add_special_pause_token = add_special_pause_token
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -63,32 +68,30 @@ class RealtimeAgent:
               and hasattr(self.resources.model.config, "max_position_embeddings"):
             self.tokenizer_max_length = self.resources.model.config.max_position_embeddings
 
-        #self.generate_kwargs = {
-        #    "pad_token_id": self.resources.tokenizer.pad_token_id,
-        #    "eos_token_id": self.resources.tokenizer.eos_token_id,
-        #    "max_new_tokens": 10,
-        #    "do_sample": True,
-        #    "top_p": 0.9,
-        #    "top_k": 70,
-        #    "temperature": 1.8,
-        #    "num_beams": 2
-        #}
+        # self.generate_kwargs = {
+        #     "pad_token_id": self.resources.tokenizer.pad_token_id,
+        #     "eos_token_id": self.resources.tokenizer.eos_token_id,
+        #     "max_new_tokens": 10,
+        #     "do_sample": True,
+        #     #"top_p": 0.95,
+        #     "top_k": 10,
+        #     #"typical_p": 0.2,
+        #     "temperature": 0.9,
+        #     "num_beams": 1
+        # }
 
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
             "max_new_tokens": 10,
-            "penalty_alpha": 0.5, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
-            "top_k": 10
+            "penalty_alpha": 0.1, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
+            "top_k": 8
         }
         if self.config.prevent_special_token_generation:
-            bad_words_ids = self.resources.tokenizer(["\n",
-                "dialog", " dialog", "Dialog", " Dialog",
-                "dialogue", " dialogue", "Dialogue", " Dialogue"
-                "<participant>", "<dialog>", "<dialogue>", "<summary>", 
-                " <participant>", " <dialog>", " <dialogue>", " <summary>",
-                "</participant>", "</dialog>", "</dialogue>", "</summary>", 
-                " </participant>", " </dialog>", " </dialogue>", " </summary>"], 
+            bad_words_ids = self.resources.tokenizer(["\n", self.resources.tokenizer.eos_token,
+                "participants:", " participants:", "Participants:", " Participants:",
+                "summary:", " summary:", "Summary:", " Summary:",
+                "transcript:", " transcript:", "Transcript:", " Transcript:"], 
                 add_prefix_space=False, add_special_tokens=False).input_ids
             self.generate_kwargs["bad_words_ids"] = bad_words_ids
 
@@ -96,9 +99,9 @@ class RealtimeAgent:
         self.any_identity_with_incomplete_regex = re.compile(rf" (?:{self.any_identity_regex.pattern}|S\Z)")
         self.agent_turn_switch_regex = re.compile(rf"(?<={self.config.agent_identity}:).+?(?= {self.any_identity_regex.pattern}|\Z)")
         self.speaker_continue_regex = re.compile(rf".+?(?= {self.any_identity_regex.pattern}|\Z)")
-        self.pause_regex = re.compile(r"\(\d*?\.\d*?\)")
+        self.pause_regex = re.compile(r"(?:<p> )?\((\d*?\.\d*?)\)")
         self.pause_at_end_regex = re.compile(rf"{self.pause_regex.pattern}\Z")
-        self.incomplete_pause_regex = re.compile(r"\(\d*?\.?\d*?\Z")
+        self.incomplete_pause_regex = re.compile(r"(?:<p> ?\(?|\()\d*?\.?\d*?\Z")
         self.end_pause_regex = re.compile(r"\)")
         self.input_segments_regex = re.compile(" (?=[~*])")
         self.sequence_split_regex = re.compile(rf"\s(?={self.any_identity_regex.pattern})")
@@ -175,7 +178,7 @@ class RealtimeAgent:
         # get previous pause duration (if any)
         pause_match = re.search(self.pause_at_end_regex, self.sequence[-10:])
         if pause_match:
-            pause_duration = self.config.interval if pause_match[0] == "(.)" else float(pause_match[0][1:-1])
+            pause_duration = self.config.interval if pause_match[1] == "." else float(pause_match[1])
             pause_match_len = pause_match.end()-pause_match.start()+1
             self.sequence = self.sequence[:-pause_match_len]
         else:
@@ -183,15 +186,17 @@ class RealtimeAgent:
 
         # increment and return
         pause_duration += seconds_since_last_cycle
-        return f" ({pause_duration:.1f})"
+        pause_prefix = "<p> " if self.config.add_special_pause_token else ""
+        return f" {pause_prefix}({pause_duration:.1f})"
         
     def _set_prefix(self):
-        prefix = ""
+        prefix = "Participants: "
         for identity, info in self.config.identities.items():
-            prefix += f"<participant> {identity} (name: {info.name}, age: {info.age}, sex: {info.sex}) "
+            prefix += f"{identity} (name: {info.name}, age: {info.age}, sex: {info.sex}), "
+        prefix = prefix.rstrip(", ") + "; "
         if self.config.summary:
-            prefix += f"<summary> {self.config.summary} "
-        prefix += "<dialog>"
+            prefix += f"Summary: {self.config.summary}; "
+        prefix += "Transcript:"
         prev_prefix_length = None
         if len(self.sequence) > 0 and self.prefix_length is not None:
             self.sequence = f"{prefix} {self.sequence[self.prefix_length:]}"
@@ -284,6 +289,7 @@ class RealtimeAgent:
         self._set_prefix()
         self._set_current_speaker(self.config.user_identity)
         self.last_cycle_time = datetime.now()
+        self.last_user_pause_time = None
         self.agent_pause_duration = 0.0
 
     def set_config(self, config):
@@ -299,18 +305,25 @@ class RealtimeAgent:
         # Check for new input:
         sequence_changed = self._update_sequence_from_input(next_input)
 
+        # If no new input and the user is currently speaking, append an incrementing pause for the user:
+        if not sequence_changed and self.current_speaker == self.config.user_identity:
+            if self.last_user_pause_time is None:
+                self.last_user_pause_time = datetime.now()
+            seconds_since_last_user_pause = (datetime.now() - self.last_user_pause_time).total_seconds()
+            if seconds_since_last_user_pause >= 0.1:
+                user_pause = self._incrementing_pause(seconds_since_last_user_pause)
+                self.sequence += user_pause
+                sequence_changed = True
+                self.last_user_pause_time = datetime.now()
+        else:
+            self.last_user_pause_time = None
+
         # If it is not time to run the next predict/output cycle yet, just return nothing.
         # Otherwise, set the last cycle time to now and proceed.
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
         if seconds_since_last_cycle < max(self.config.interval, self.agent_pause_duration):
             return output, sequence_changed
         self.last_cycle_time = datetime.now()
-
-        # If no new input and the user is currently speaking, append an incrementing pause for the user:
-        if not sequence_changed and self.current_speaker == self.config.user_identity:
-            user_pause = self._incrementing_pause(seconds_since_last_cycle)
-            self.sequence += user_pause
-            sequence_changed = True
 
         # Predict continuation
         self.agent_pause_duration = 0.0
@@ -351,7 +364,7 @@ class RealtimeAgent:
             if not self.agent_pause_duration > 0.0:
                 agent_pause = re.search(self.pause_regex, output)
                 if agent_pause:
-                    self.agent_pause_duration = self.config.interval if agent_pause[0] == "(.)" else float(agent_pause[0][1:-1])
+                    self.agent_pause_duration = self.config.interval if agent_pause[1] == "." else float(agent_pause[1])
                     self.agent_pause_duration = min(self.agent_pause_duration, self.config.max_agent_pause_duration)
 
         #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")

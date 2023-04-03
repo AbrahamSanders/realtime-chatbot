@@ -246,6 +246,11 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Whether to keep line breaks when using TXT files or not."}
     )
 
+    add_special_tokens: bool = field(
+        default=False, metadata={"help": "Whether to add special tokens (e.g., ' <p>' for pauses) "\
+        "to the model vocabulary."}
+    )
+
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
             raise ValueError("Need either a dataset name or a training/validation file.")
@@ -454,6 +459,10 @@ def main():
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
     anchor_logits_dimension = len(tokenizer)
+    if data_args.add_special_tokens:
+        special_tokens = {"additional_special_tokens": [" <p>"]}
+        tokenizer.add_special_tokens(special_tokens)
+        
     model.resize_token_embeddings(len(tokenizer))
     if model_args.use_anchor_model:
         anchor_model.resize_token_embeddings(len(tokenizer))

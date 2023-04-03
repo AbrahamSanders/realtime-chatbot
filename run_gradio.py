@@ -20,7 +20,8 @@ class RealtimeAgentGradioInterface:
         self.agent = RealtimeAgentMultiprocessing(
             wait_until_running=False,
             config=RealtimeAgentConfig(random_state=self.args.random_state, 
-                                       prevent_special_token_generation=self.args.prevent_special_token_generation),
+                                       prevent_special_token_generation=self.args.prevent_special_token_generation,
+                                       add_special_pause_token=self.args.add_special_pause_token),
             modelpath=self.args.agent_modelpath,
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
@@ -66,10 +67,16 @@ class RealtimeAgentGradioInterface:
             state["asr_config"] = asr_config
             self.asr_handler.queue_config(asr_config)
 
-        agent_config = RealtimeAgentConfig(interval=agent_interval, identities={
-            "S1": Identity(user_name, user_age, user_sex),
-            "S2": Identity(agent_name, agent_age, agent_sex)
-        }, random_state=self.args.random_state, summary=summary)
+        agent_config = RealtimeAgentConfig(
+            interval=agent_interval, identities={
+                "S1": Identity(user_name, user_age, user_sex),
+                "S2": Identity(agent_name, agent_age, agent_sex)
+            }, 
+            random_state=self.args.random_state, 
+            summary=summary,
+            prevent_special_token_generation=self.args.prevent_special_token_generation,
+            add_special_pause_token=self.args.add_special_pause_token
+        )
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
@@ -115,7 +122,7 @@ class RealtimeAgentGradioInterface:
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.6, step=0.1, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.7, step=0.1, label="Agent prediction interval")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
@@ -201,8 +208,6 @@ class RealtimeAgentGradioInterface:
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
-    parser.add_argument("--prevent-special-token-generation", action="store_true",
-                        help="Use with base OPT model for zero-shot inference. (default: %(default)s)")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")

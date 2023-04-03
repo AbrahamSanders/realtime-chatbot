@@ -50,7 +50,12 @@ def main():
     print()
 
     identities = configure_identities()
-    config = RealtimeAgentConfig(identities=identities, random_state=args.random_state)
+    config = RealtimeAgentConfig(
+        identities=identities, 
+        random_state=args.random_state,
+        prevent_special_token_generation=args.prevent_special_token_generation,
+        add_special_pause_token=args.add_special_pause_token
+    )
     agent = RealtimeAgentMultiprocessing(config=config, modelpath=args.agent_modelpath)
     listener = KeyboardListener()
     user_speaking = None
