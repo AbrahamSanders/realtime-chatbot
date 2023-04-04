@@ -76,7 +76,7 @@ class TTSHandlerMultiprocessing:
         models, cfg, tts_task = load_model_ensemble_and_task_from_hf_hub(
             #"facebook/fastspeech2-en-ljspeech",
             "facebook/fastspeech2-en-200_speaker-cv4",
-            arg_overrides={"vocoder": "hifigan", "fp16": True}
+            arg_overrides={"vocoder": "hifigan", "fp16": False}
         )
         tts_model = models[0].to(device)
         tts_model.encoder.forward = get_encoder_forward_override(tts_model.encoder)
