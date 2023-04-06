@@ -12,6 +12,8 @@ from transformers.generation.utils import (
     CausalLMOutputWithPast
 )
 
+# >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
+
 class TopPProbsWarper(LogitsWarper):
     """
     [`LogitsWarper`] that performs top-p, i.e. restricting to top tokens summing to prob_cut_off <= prob_cut_off.
@@ -50,34 +52,48 @@ class TopPProbsWarper(LogitsWarper):
         scores = scores.masked_fill(indices_to_remove, self.filter_value)
         return scores
 
+# >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
+
 def _ranking_fast(
     context_hidden: torch.FloatTensor,
     next_hidden: torch.FloatTensor,
     next_top_k_probs: torch.FloatTensor,
     alpha: float,
     beam_width: int,
+    # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
     penalty_mask: torch.FloatTensor,
     do_sample: bool
+    # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
 ) -> torch.FloatTensor:
     """
     Reranks the top_k candidates based on a degeneration penalty (cosine similarity with previous tokens), as described
     in the paper "A Contrastive Framework for Neural Text Generation". Returns the index of the best candidate for each
     row in the batch.
     """
+    # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
     if do_sample:
         zero_probs = next_top_k_probs == 0.0
+    # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
+
     norm_context_hidden = context_hidden / context_hidden.norm(dim=2, keepdim=True)
     norm_next_hidden = next_hidden / next_hidden.norm(dim=2, keepdim=True)
     cosine_matrix = torch.matmul(norm_context_hidden, norm_next_hidden.transpose(1, 2)).squeeze(-1)  # [B*K, S]
     degeneration_penalty, _ = torch.max(cosine_matrix, dim=-1)  # [B*K]
     next_top_k_probs = next_top_k_probs.view(-1)  # [B*K]
+    
+    # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
     contrastive_score = (1.0 - alpha) * next_top_k_probs - alpha * degeneration_penalty * penalty_mask.view(-1)
+    # >>>>>>>>>>>> START: END LOGIC <<<<<<<<<<<<
+    
     contrastive_score = torch.stack(torch.split(contrastive_score, beam_width))  # [B, K]
+    
+    # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
     if do_sample:
         contrastive_score[zero_probs] = -1 #-float("Inf")
         #sampling_weights = nn.functional.softmax(contrastive_score, dim=-1)
         sampling_weights = (1+contrastive_score) / (1+contrastive_score).sum(dim=-1, keepdim=True)
         selected_idx = torch.multinomial(sampling_weights, num_samples=1).squeeze(-1)
+    # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
     else:
         _, selected_idx = contrastive_score.max(dim=-1)  # [B]
     return selected_idx
@@ -216,10 +232,12 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
         this_peer_finished = False  # used by synced_gpus only
         batch_size = input_ids.shape[0]
 
+        # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
         do_sample = False
         if sample_top_p > 0.0:
             top_p_probs_warper = TopPProbsWarper(sample_top_p)
             do_sample = True
+        # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
 
         while True:
             if synced_gpus:
@@ -287,6 +305,8 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             logit_for_next_step = logits_processor(input_ids, logit_for_next_step)
             logit_for_next_step = logits_warper(input_ids, logit_for_next_step)
+
+            # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
             next_probs = nn.functional.softmax(logit_for_next_step / sample_temperature, dim=-1)
             #if do_sample:
             #    top_k_logits, top_k_ids = torch.topk(logit_for_next_step, dim=-1, k=top_k)
@@ -296,8 +316,7 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
             top_k_probs, top_k_ids = torch.topk(next_probs, dim=-1, k=top_k)
             if do_sample:
                 top_k_probs = top_p_probs_warper(None, top_k_probs)
-            
-            # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
+
             if min_penalty_alpha != max_penalty_alpha:
                 #next_entropy = entr(next_probs).sum(dim=-1)
                 next_expected_prob = (next_probs ** 2).sum(dim=-1)
@@ -361,7 +380,12 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             # compute the degeneration penalty and re-rank the candidates based on the degeneration penalty and the
             # model confidence
-            selected_idx = _ranking_fast(context_hidden, next_hidden, top_k_probs, penalty_alpha, top_k, penalty_mask, do_sample)
+            selected_idx = _ranking_fast(
+                context_hidden, next_hidden, top_k_probs, penalty_alpha, top_k, 
+                # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
+                penalty_mask, do_sample
+                # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
+            )
 
             # prepare for the next step: (1) next token_id; (2) past_key_values; (3) last_hidden_states for computing
             # the degeneration penalty; (4) logits for selecting next top-k candidates; (5) selected tokens scores
