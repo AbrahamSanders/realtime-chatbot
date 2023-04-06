@@ -27,7 +27,7 @@ class RealtimeAgent_Resources:
 
         self.model = self.model.to(self.device)
 
-        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.0, 1.0, sample_top_p=0.825)
+        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
@@ -366,6 +366,12 @@ class RealtimeAgent:
                 if agent_pause:
                     self.agent_pause_duration = self.config.interval if agent_pause[1] == "." else float(agent_pause[1])
                     self.agent_pause_duration = min(self.agent_pause_duration, self.config.max_agent_pause_duration)
+            # Otherwise, it has been explicitly set by an incrementing pause, so override the output with the actual pause value.
+            # this ensures downstream processors (e.g., TTS handler) get the correct pause value, even though the sequence will
+            # contain the cumulative incremental pause value.
+            else:
+                pause_prefix = "<p> " if self.config.add_special_pause_token else ""
+                output = f" {pause_prefix}({self.agent_pause_duration:.1f})"
 
         #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")
         return output, sequence_changed
@@ -404,6 +410,7 @@ class RealtimeAgentMultiprocessing:
         agent_resources = RealtimeAgent_Resources(modelpath=modelpath, device=device)
         agent = RealtimeAgent(resources=agent_resources, config=config)
 
+        last_speaker = agent.current_speaker
         self.running.value = True
         while True:
             try:
@@ -421,6 +428,13 @@ class RealtimeAgentMultiprocessing:
                     self.output_queue.put(output)
                     if self.chain_to_input_queue is not None:
                         self.chain_to_input_queue.put(output)
+
+                #HACK: if the user has started speaking, send an empty pause to the chained input queue
+                #      (usually the TTS handler) to force any agent utterances stuck in the buffer to be processed.
+                if self.chain_to_input_queue is not None and agent.current_speaker == agent.config.user_identity \
+                                                         and last_speaker != agent.config.user_identity:
+                    self.chain_to_input_queue.put(" (0.0)")
+                last_speaker = agent.current_speaker
 
                 if self.output_sequence and sequence_changed:
                     max_length = 0 if self.output_sequence_max_length is None else self.output_sequence_max_length

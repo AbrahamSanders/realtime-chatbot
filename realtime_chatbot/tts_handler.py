@@ -36,7 +36,8 @@ class TTSHandlerMultiprocessing:
         self.output_queue = ctx.Queue()
         self.running = ctx.Value(c_bool, False)
 
-        self.pause_regex = re.compile(r"(?:<p> )?\(\d*?\.\d*?\)")
+        self.pause_regex = re.compile(r"(?:<p> )?(\(\d*?\.\d*?\))")
+        self.pause_value_regex = re.compile(r"\((\d*?\.\d*?)\)")
 
         self.execute_process = ctx.Process(target=self.execute, daemon=True, args=(config, device))
         self.execute_process.start()
@@ -118,30 +119,44 @@ class TTSHandlerMultiprocessing:
                 if items_to_process is not None:
                     next_input = " ".join(items_to_process)
                     items_to_process.clear()
-                    next_input = self.sanitize_text_for_tts(next_input)
-                    if next_input:
-                        sample = TTSHubInterface.get_model_input(tts_task, next_input, speaker=config.speaker)
-                        sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(device)
-                        sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(device)
-                        if sample["speaker"] is not None:
-                            sample["speaker"] = sample["speaker"].to(device)
-                        
-                        d_factor = torch.ones_like(sample["net_input"]["src_tokens"], dtype=torch.float32)
-                        #d_factor[:, 1] *= config.duration_factor
-                        p_factor = torch.ones_like(d_factor)
-                        #p_factor[:, 1] *= config.pitch_factor
-                        wav, rate = TTSHubInterface.get_prediction(
-                            tts_task, tts_model, tts_generator, sample, d_factor=d_factor, 
-                            p_factor=p_factor, e_factor=config.energy_factor
-                        )
+                    # split the input by pauses, converting each pause to blank audio and each non-pause to speech
+                    next_input_segs = re.split(self.pause_regex, next_input)
+                    for input_seg in next_input_segs:
+                        if re.match(self.pause_regex, input_seg):
+                            # In case of a pause, convert the pause to blank audio
+                            pause_value = float(re.search(self.pause_value_regex, input_seg)[1])
+                            if not pause_value > 0.0:
+                                continue
+                            rate = 22050 // config.downsampling_factor
+                            blank_wav = torch.zeros(int(rate * pause_value), dtype=torch.float32).numpy()
+                            self.output_queue.put((rate, blank_wav))
+                        else:
+                            # In case of non-pause text, convert the text to speech
+                            input_seg = self.sanitize_text_for_tts(input_seg)
+                            if not input_seg:
+                                continue
+                            sample = TTSHubInterface.get_model_input(tts_task, input_seg, speaker=config.speaker)
+                            sample["net_input"]["src_tokens"] = sample["net_input"]["src_tokens"].to(device)
+                            sample["net_input"]["src_lengths"] = sample["net_input"]["src_lengths"].to(device)
+                            if sample["speaker"] is not None:
+                                sample["speaker"] = sample["speaker"].to(device)
+                            
+                            d_factor = torch.ones_like(sample["net_input"]["src_tokens"], dtype=torch.float32)
+                            #d_factor[:, 1] *= config.duration_factor
+                            p_factor = torch.ones_like(d_factor)
+                            #p_factor[:, 1] *= config.pitch_factor
+                            wav, rate = TTSHubInterface.get_prediction(
+                                tts_task, tts_model, tts_generator, sample, d_factor=d_factor, 
+                                p_factor=p_factor, e_factor=config.energy_factor
+                            )
 
-                        # downsample & enhance (if selected)
-                        new_rate = rate // config.downsampling_factor
-                        wav, cached_resample = audio_helpers.downsample(wav, rate, new_rate, cached_resample)
-                        wav, new_rate = speech_enhancer.enhance(config.enhancement_model, wav, new_rate)
+                            # downsample & enhance (if selected)
+                            new_rate = rate // config.downsampling_factor
+                            wav, cached_resample = audio_helpers.downsample(wav, rate, new_rate, cached_resample)
+                            wav, new_rate = speech_enhancer.enhance(config.enhancement_model, wav, new_rate)
 
-                        wav = wav.cpu().numpy()
-                        self.output_queue.put((new_rate, wav))
+                            wav = wav.cpu().numpy()
+                            self.output_queue.put((new_rate, wav))
             except:
                 #TODO: logging here
                 pass
