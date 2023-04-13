@@ -1,4 +1,5 @@
 python train.py \
+    --log_level info \
     --model_name_or_path=facebook/opt-2.7b \
     --no_use_fast_tokenizer \
     --train_file=data/dataset_train.txt \
@@ -14,7 +15,7 @@ python train.py \
     --data_seed=42 \
     --eval_steps=163 \
     --logging_steps=10 \
-    --save_total_limit=1 \
+    --save_total_limit=2 \
     --evaluation_strategy=steps \
     --lr_scheduler_type=linear \
     --num_train_epochs=8 \
