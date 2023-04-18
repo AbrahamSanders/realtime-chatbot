@@ -118,6 +118,7 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
         output_scores: Optional[bool] = None,
         return_dict_in_generate: Optional[bool] = None,
         synced_gpus: Optional[bool] = False,
+        streamer: Optional["BaseStreamer"] = None,
         **model_kwargs,
     ) -> Union[ContrastiveSearchOutput, torch.LongTensor]:
         r"""
@@ -161,6 +162,9 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
             synced_gpus (`bool`, *optional*, defaults to `False`):
                 Whether to continue running the while loop until max_length (needed for ZeRO stage 3)
+            streamer (`BaseStreamer`, *optional*):
+                Streamer object that will be used to stream the generated sequences. Generated tokens are passed
+                through `streamer.put(token_ids)` and the streamer is responsible for any further processing.
             model_kwargs:
                 Additional model specific keyword arguments will be forwarded to the `forward` function of the model.
                 If model is an encoder-decoder model the kwargs should include `encoder_outputs`.
@@ -227,7 +231,7 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
             )
 
         # keep track of which sequences are already finished
-        unfinished_sequences = input_ids.new(input_ids.shape[0]).fill_(1)
+        unfinished_sequences = torch.ones(input_ids.shape[0], dtype=torch.long, device=input_ids.device)
 
         this_peer_finished = False  # used by synced_gpus only
         batch_size = input_ids.shape[0]
@@ -455,6 +459,8 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             # update generated ids, model inputs, and length for next step
             input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+            if streamer is not None:
+                streamer.put(next_tokens.cpu())
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs, model_kwargs, is_encoder_decoder=self.config.is_encoder_decoder
             )
@@ -471,6 +477,9 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
                     break
                 else:
                     this_peer_finished = True
+
+        if streamer is not None:
+            streamer.end()
 
         if return_dict_in_generate:
             if self.config.is_encoder_decoder:
