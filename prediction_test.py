@@ -9,31 +9,34 @@ import re
 from realtime_chatbot.utils import args_helpers
 from realtime_chatbot.dynamic_contrastive import get_contrastive_search_override
 
+class PredictedCompletion:
+    def __init__(self):
+        self.context_pos = None
+        self.completion = None
+        self.embedding = None
+        self.response = None
+
 def get_process_method(model, tokenizer, device):
 
-    def predict_completion(sequence, similarity_threshold, seed, max_new_tokens, 
-                           last_prediction_context_pos, last_prediction, last_prediction_embed, 
-                           last_prediction_response, **generate_kwargs):
+    def predict_completion(sequence, similarity_threshold, seed, max_new_tokens, last_prediction, **generate_kwargs):
         similarity_with_last_pred = 0.0
         input_ids = None
-        if last_prediction_context_pos is not None:
-            last_pred_context, actual_completion = sequence[:last_prediction_context_pos], sequence[last_prediction_context_pos:]
+        if last_prediction is not None and last_prediction.embedding is not None:
+            last_pred_context, actual_completion = sequence[:last_prediction.context_pos], sequence[last_prediction.context_pos:]
             last_pred_context_tokens = tokenizer.encode(last_pred_context, return_tensors="pt").to(device)
             actual_completion_tokens = tokenizer.encode(actual_completion, return_tensors="pt", add_special_tokens=False).to(device)
             input_ids = torch.cat((last_pred_context_tokens, actual_completion_tokens), dim=1)
             with torch.no_grad():
                 outputs = model(input_ids=input_ids, output_hidden_states=True, return_dict=True)
-                actual_completion_embed = outputs.hidden_states[-1][:, last_pred_context_tokens.shape[-1]:].mean(dim=1)
-                similarity_with_last_pred = torch.cosine_similarity(last_prediction_embed, actual_completion_embed, dim=-1).item()
+                actual_completion_embedding = outputs.hidden_states[-1][:, last_pred_context_tokens.shape[-1]:].mean(dim=1)
+                similarity_with_last_pred = torch.cosine_similarity(last_prediction.embedding, actual_completion_embedding, dim=-1).item()
 
         if seed:
             set_seed(int(seed))
 
         if similarity_with_last_pred >= similarity_threshold:
             # If last prediction is similar enough to the actual completion, no need to make a new prediction. Just check if we're at a turn-switch.
-            prediction_context_pos, prediction, prediction_embed, prediction_response = (
-                last_prediction_context_pos, last_prediction, last_prediction_embed, last_prediction_response
-            )
+            prediction = last_prediction
             outputs = model.generate(input_ids=input_ids, max_new_tokens=1, **generate_kwargs)
             is_turn_switch = outputs[0, -1].item() == generate_kwargs["eos_token_id"]
         else:
@@ -43,27 +46,28 @@ def get_process_method(model, tokenizer, device):
             outputs = model.generate(
                 input_ids=input_ids, output_hidden_states=True, return_dict_in_generate=True, max_new_tokens=max_new_tokens, **generate_kwargs
             )
-            prediction_context_pos = len(sequence)
-            prediction = tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:-1], skip_special_tokens=False)
-            prediction_embed = None
+            prediction = PredictedCompletion()
+            prediction.context_pos = len(sequence)
+            prediction.completion = tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:-1], skip_special_tokens=False)
             is_turn_switch = True
-            if prediction:
-                prediction_embed = torch.cat([pos_states[-1] for pos_states in outputs.hidden_states[1:]], dim=1).mean(dim=1)
+            if prediction.completion:
+                prediction.embedding = torch.cat([pos_states[-1] for pos_states in outputs.hidden_states[1:]], dim=1).mean(dim=1)
                 is_turn_switch = False
             # Generate a response to the predicted completion.
             input_ids = outputs.sequences
             outputs = model.generate(input_ids=input_ids, max_new_tokens=max_new_tokens, **generate_kwargs)
-            prediction_response = tokenizer.decode(outputs[0, input_ids.shape[-1]-1:-1], skip_special_tokens=False)
+            prediction.response = tokenizer.decode(outputs[0, input_ids.shape[-1]-1:-1], skip_special_tokens=False)
 
-        return similarity_with_last_pred, prediction_context_pos, prediction, prediction_embed, prediction_response, is_turn_switch
+        is_turn_switch_to_agent = is_turn_switch and prediction.response.lstrip().startswith("S2")
+        return prediction, similarity_with_last_pred, is_turn_switch_to_agent
 
     def process_text(input_text, step_size, similarity_threshold, seed, decoding, max_new_tokens, temperature, num_beams, 
-                        top_k, top_p, typical_p, min_penalty_alpha, max_penalty_alpha):
+                     top_k, top_p, typical_p, min_penalty_alpha, max_penalty_alpha):
         
         generate_kwargs = {
-                "num_beams": int(num_beams),
-                "early_stopping": True,
-                "eos_token_id": tokenizer(" S", add_special_tokens=False).input_ids[0]
+            "num_beams": int(num_beams),
+            "early_stopping": True,
+            "eos_token_id": tokenizer(" S", add_special_tokens=False).input_ids[0]
         }
         if decoding != "Greedy":
             generate_kwargs["top_k"] = int(top_k)
@@ -88,35 +92,26 @@ def get_process_method(model, tokenizer, device):
         actual_completion_words = re.findall(" *[^ ]+", actual_completion)
         
         similarity_with_last_pred = 0.0
-        last_prediction_context_pos = None
         last_prediction = None
-        last_prediction_embed = None
-        last_prediction_response = None
         while True:
-            similarity_with_last_pred, prediction_context_pos, prediction, prediction_embed, prediction_response, is_turn_switch = predict_completion(
+            prediction, similarity_with_last_pred, is_turn_switch_to_agent = predict_completion(
                 context, 
                 float(similarity_threshold), 
                 seed, 
                 int(max_new_tokens), 
-                last_prediction_context_pos, 
                 last_prediction, 
-                last_prediction_embed, 
-                last_prediction_response, 
                 **generate_kwargs
             )
-            display_context_pos = last_prediction_context_pos if last_prediction_context_pos is not None else prediction_context_pos
+            display_context_pos = last_prediction.context_pos if last_prediction is not None else prediction.context_pos
             results_dict["Context"].append(f"...{context[display_context_pos-30:display_context_pos]}")
             results_dict["Actual Completion"].append(context[display_context_pos:])
             results_dict["Sim. With Last Pred"].append(similarity_with_last_pred)
-            results_dict["Predicted Completion"].append(prediction if prediction != last_prediction else "^^^^^^")
-            results_dict["Predicted Response"].append(prediction_response if prediction_response != last_prediction_response else "^^^^^^")
+            results_dict["Predicted Completion"].append(prediction.completion if prediction != last_prediction else "^^^^^^")
+            results_dict["Predicted Response"].append(prediction.response if prediction != last_prediction else "^^^^^^")
 
-            if is_turn_switch or len(actual_completion_words) == 0:
+            if is_turn_switch_to_agent or len(actual_completion_words) == 0:
                 break
-            last_prediction_context_pos = prediction_context_pos
             last_prediction = prediction
-            last_prediction_embed = prediction_embed
-            last_prediction_response = prediction_response
 
             # prepare context for next step
             context += "".join(actual_completion_words[:step_size])
