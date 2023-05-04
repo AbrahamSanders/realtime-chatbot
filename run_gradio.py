@@ -15,6 +15,7 @@ class RealtimeAgentGradioInterface:
         device_map = device_helpers.get_device_map()
         self.tts_handler = TTSHandlerMultiprocessing(
             wait_until_running=False,
+            config=TTSConfig(tts_engine=self.args.tts_engine),
             device=device_map["tts"]
         )
         self.agent = RealtimeAgentMultiprocessing(
@@ -81,7 +82,8 @@ class RealtimeAgentGradioInterface:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
 
-        tts_config = TTSConfig(buffer_size=tts_buffer_size, downsampling_factor=tts_downsampling_factor, 
+        tts_config = TTSConfig(tts_engine=self.args.tts_engine, buffer_size=tts_buffer_size, 
+                               downsampling_factor=tts_downsampling_factor, 
                                speaker=agent_voice, enhancement_model=tts_enhancement)
         if tts_config != state["tts_config"]:
             state["tts_config"] = tts_config
@@ -122,7 +124,7 @@ class RealtimeAgentGradioInterface:
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.7, step=0.1, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.7, step=0.1, label="Agent prediction interval")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
@@ -151,10 +153,10 @@ class RealtimeAgentGradioInterface:
             choices=[default_identities["S2"].sex, "male", "female"], 
             default=default_identities["S2"].sex, label="Agent Gender"
         )
-        agent_voice_dropdown = gr.inputs.Dropdown(
-            type="index",
-            choices=[f"Voice {i+1}" for i in range(200)],
-            default="Voice 16", label="Agent Voice"
+        agent_voice_dropdown = gr.Dropdown(
+            choices=self.tts_handler.available_speakers, 
+            value=self.tts_handler.available_speakers[0],
+            label="Agent Voice"
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
@@ -208,6 +210,7 @@ class RealtimeAgentGradioInterface:
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
+    parser.add_argument("--tts-engine", type=str, default="fastspeech2", help="TTS engine to use")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")
