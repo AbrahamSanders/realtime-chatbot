@@ -1,13 +1,17 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.trainer_utils import set_seed
+from transformers.generation import StoppingCriteriaList
 import torch
 import re
 import uuid
+import math
 from time import sleep
 from datetime import datetime
+from collections import deque
 
 from .identity import Identity
 from .utils import queue_helpers
+from .utils.generate_helpers import CompletionAndResponseStoppingCriteria
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
@@ -27,7 +31,7 @@ class RealtimeAgent_Resources:
 
         self.model = self.model.to(self.device)
 
-        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
+        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.7)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
@@ -36,7 +40,7 @@ class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
                  interval=0.7, max_history_words=100, max_agent_pause_duration=10.0, 
                  random_state=None, prevent_special_token_generation=False, summary=None,
-                 add_special_pause_token=False):
+                 add_special_pause_token=False, predictive_lookahead=True, similarity_threshold=0.8):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -49,9 +53,18 @@ class RealtimeAgentConfig:
         self.prevent_special_token_generation = prevent_special_token_generation
         self.summary = summary
         self.add_special_pause_token = add_special_pause_token
+        self.predictive_lookahead = predictive_lookahead
+        self.similarity_threshold = similarity_threshold
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
+
+class PredictedCompletion:
+    def __init__(self):
+        self.context_pos = None
+        self.completion = None
+        self.embedding = None
+        self.response = None
 
 class RealtimeAgent:
     def __init__(self, resources=None, config=None):
@@ -68,22 +81,10 @@ class RealtimeAgent:
               and hasattr(self.resources.model.config, "max_position_embeddings"):
             self.tokenizer_max_length = self.resources.model.config.max_position_embeddings
 
-        # self.generate_kwargs = {
-        #     "pad_token_id": self.resources.tokenizer.pad_token_id,
-        #     "eos_token_id": self.resources.tokenizer.eos_token_id,
-        #     "max_new_tokens": 10,
-        #     "do_sample": True,
-        #     #"top_p": 0.95,
-        #     "top_k": 10,
-        #     #"typical_p": 0.2,
-        #     "temperature": 0.9,
-        #     "num_beams": 1
-        # }
-
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
-            "max_new_tokens": 10,
+            "max_new_tokens": 5,
             "penalty_alpha": 0.1, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
             "top_k": 8
         }
@@ -110,36 +111,37 @@ class RealtimeAgent:
         
         self.reset()
 
-    def _generate(self, sequence, stopping_criteria=None, **generate_kwargs_overrides):
+    def _generate(self, sequence, stopping_criteria=None, take_tokens=None, return_generate_output=False, **generate_kwargs_overrides):
         # Configure generation params
         generate_kwargs = self.generate_kwargs.copy()
         if generate_kwargs_overrides:
             generate_kwargs.update(generate_kwargs_overrides)
+        if isinstance(stopping_criteria, StoppingCriteriaList):
+            generate_kwargs["stopping_criteria"] = stopping_criteria
+            stopping_criteria = None
 
-        # Tokenize sequence
-        inputs = self.resources.tokenizer(
-            sequence, truncation=True, max_length=self.tokenizer_max_length, return_tensors="pt"
-        ).to(self.resources.device)
+        if isinstance(sequence, str):
+            # Tokenize sequence
+            inputs = self.resources.tokenizer(
+                sequence, truncation=True, max_length=self.tokenizer_max_length, return_tensors="pt"
+            ).to(self.resources.device)
+        else:
+            inputs = {"input_ids": sequence.to(self.resources.device)}
+        
+        generate_kwargs.update(inputs)
 
         # Generate
         if self.config.random_state is not None:
             set_seed(self.config.random_state)
 
-        generate_result = self.resources.model.generate(
-            input_ids=inputs.input_ids,
-            attention_mask = inputs.attention_mask,
-            return_dict_in_generate=True,
-            **generate_kwargs
-        )
-        result_ids = generate_result.sequences.cpu()
+        outputs = self.resources.model.generate(return_dict_in_generate=True, **generate_kwargs)
 
         # Decode and return results
         results = []
-        take_tokens = 5
-        for i in range(result_ids.shape[0]):
-            response_start_idx = inputs.input_ids.shape[-1]
-            response_end_idx = response_start_idx + take_tokens
-            generated_text = self.resources.tokenizer.decode(result_ids[i, response_start_idx:response_end_idx], 
+        for i in range(outputs.sequences.shape[0]):
+            response_start_idx = inputs["input_ids"].shape[-1]
+            response_end_idx = response_start_idx + take_tokens if take_tokens is not None else outputs.sequences.shape[-1]
+            generated_text = self.resources.tokenizer.decode(outputs.sequences[i, response_start_idx:response_end_idx], 
                                                              skip_special_tokens=False)
             generated_text = generated_text.replace(self.resources.tokenizer.pad_token, "")
             generated_text = generated_text.replace(self.resources.tokenizer.eos_token, "")
@@ -153,11 +155,14 @@ class RealtimeAgent:
             results.append(generated_text)
 
         gen_results = results if len(results) > 1 else results[0]
+        if return_generate_output:
+            gen_results = (gen_results, outputs)
         return gen_results
 
     def _set_current_speaker(self, identity):
         self.sequence += f" {identity}:"
         self.current_speaker = identity
+        self.last_prediction = None
 
     def _trim_sequence(self):
         dialog_history = self.sequence[self.prefix_length:]
@@ -173,6 +178,8 @@ class RealtimeAgent:
             self.sequence = f"{self.sequence[:self.prefix_length]}{trimmed_history}"
             if self.partial_pos > -1:
                 self.partial_pos += len(self.sequence)-prev_sequence_length
+            if self.last_prediction is not None:
+                self.last_prediction.context_pos += len(self.sequence)-prev_sequence_length
 
     def _incrementing_pause(self, seconds_since_last_cycle):
         # get previous pause duration (if any)
@@ -204,8 +211,11 @@ class RealtimeAgent:
         else:
             self.sequence = prefix
         self.prefix_length = len(prefix)+1
-        if prev_prefix_length is not None and self.partial_pos > -1:
-            self.partial_pos += self.prefix_length-prev_prefix_length
+        if prev_prefix_length is not None:
+            if self.partial_pos > -1:
+                self.partial_pos += self.prefix_length-prev_prefix_length
+            if self.last_prediction is not None:
+                self.last_prediction.context_pos += self.prefix_length-prev_prefix_length
 
     def _get_next_slice_index(self, str, i):
         if i < len(str):
@@ -283,6 +293,64 @@ class RealtimeAgent:
                     sequence_changed = True
         return sequence_changed
 
+    def _predict_completion(self, last_prediction):
+        last_pred_embedding_exists = last_prediction is not None and last_prediction.embedding is not None
+        if last_pred_embedding_exists and last_prediction.context_pos < len(self.sequence):
+            last_pred_context, actual_completion = self.sequence[:last_prediction.context_pos], self.sequence[last_prediction.context_pos:]
+            last_pred_context_tokens = self.resources.tokenizer.encode(last_pred_context, return_tensors="pt").to(self.resources.device)
+            actual_completion_tokens = self.resources.tokenizer.encode(actual_completion, return_tensors="pt", add_special_tokens=False).to(self.resources.device)
+            input_ids = torch.cat((last_pred_context_tokens, actual_completion_tokens), dim=1)
+            with torch.no_grad():
+                outputs = self.resources.model(input_ids=input_ids, output_hidden_states=True, return_dict=True)
+                actual_completion_embedding = outputs.hidden_states[-1][:, last_pred_context_tokens.shape[-1]:].mean(dim=1)
+                similarity_with_last_pred = torch.cosine_similarity(last_prediction.embedding, actual_completion_embedding, dim=-1).item()
+        else:
+            input_ids = self.resources.tokenizer.encode(self.sequence, return_tensors="pt").to(self.resources.device)
+            similarity_with_last_pred = 1.0 if last_pred_embedding_exists else -1.0
+
+        turn_switch_token = " S"
+        turn_switch_token_id = self.resources.tokenizer(turn_switch_token, add_special_tokens=False).input_ids[0]
+        if similarity_with_last_pred >= self.config.similarity_threshold:
+            # If last prediction is similar enough to the actual completion, no need to make a new prediction. Just check if we're at a turn-switch.
+            prediction = last_prediction
+            next_token = self._generate(input_ids, max_new_tokens=1)
+            is_turn_switch = next_token == turn_switch_token
+        else:
+            # Otherwise, make a new utterance completion prediction.
+            stopping_criteria = StoppingCriteriaList([CompletionAndResponseStoppingCriteria(turn_switch_token_id)])
+            _, outputs = self._generate(
+                input_ids, stopping_criteria=stopping_criteria, 
+                return_generate_output=True, output_hidden_states=True, max_new_tokens=50
+            )
+            prediction = PredictedCompletion()
+            prediction.context_pos = len(self.sequence)
+            completion_length = stopping_criteria[0].completion_length
+            completion_end_pos = input_ids.shape[-1] + completion_length
+            prediction.completion = self.resources.tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:completion_end_pos], skip_special_tokens=False)
+            prediction.response = self.resources.tokenizer.decode(outputs.sequences[0, completion_end_pos:], skip_special_tokens=False).rstrip(turn_switch_token)
+            is_turn_switch = True
+            if completion_length > 0:
+                prediction.embedding = torch.cat([pos_states[-1] for pos_states in outputs.hidden_states[1:completion_length+1]], dim=1).mean(dim=1)
+                is_turn_switch = False
+
+        is_turn_switch_to_agent = is_turn_switch and prediction.response.lstrip().startswith(self.config.agent_identity)
+        return prediction, is_turn_switch_to_agent, similarity_with_last_pred
+
+    def _cache_response(self, response):
+        self.response_cache.clear()
+        # divide response into k chunks to be released one at a time at every agent interval
+        response_tokens = self.resources.tokenizer.encode(response, add_special_tokens=False)
+        chunk_size = self.generate_kwargs["max_new_tokens"]
+        num_chunks = math.ceil(len(response_tokens)/chunk_size)
+        for i in range(num_chunks):
+            chunk = self.resources.tokenizer.decode(response_tokens[i*chunk_size:(i+1)*chunk_size], skip_special_tokens=False)
+            self.response_cache.append(chunk)
+
+    def _release_cached_response_chunk(self):
+        if len(self.response_cache) > 0:
+            return self.response_cache.popleft()
+        return None
+
     def reset(self):
         self.sequence = ""
         self.partial_pos = -1
@@ -291,6 +359,7 @@ class RealtimeAgent:
         self.last_cycle_time = datetime.now()
         self.last_user_pause_time = None
         self.agent_pause_duration = 0.0
+        self.response_cache = deque()
 
     def set_config(self, config):
         do_set_prefix = config.identities != self.config.identities
@@ -328,10 +397,28 @@ class RealtimeAgent:
         # Predict continuation
         self.agent_pause_duration = 0.0
         self._trim_sequence()
+
         prediction = ""
-        while not prediction or re.search(self.incomplete_pause_regex, prediction):
-            stopping_criteria = self.pause_regex if not prediction else self.end_pause_regex
-            prediction += self._generate(f"{self.sequence}{prediction}", stopping_criteria=stopping_criteria)
+        if self.config.predictive_lookahead and self.current_speaker != self.config.agent_identity:
+            self.last_prediction, is_turn_switch_to_agent, similarity_with_last_pred = self._predict_completion(self.last_prediction)
+            print(f"Lookahead completion '{self.last_prediction.completion}'; "
+                  f"Similarity with last prediction: {similarity_with_last_pred:.3f}")
+            if similarity_with_last_pred < self.config.similarity_threshold:
+                print(f"Caching lookahead response: '{self.last_prediction.response}'")
+                self._cache_response(self.last_prediction.response)
+            if is_turn_switch_to_agent:
+                print("Releasing cached lookahead response...")
+                cached_chunk = self._release_cached_response_chunk()
+                if cached_chunk is not None:
+                    prediction = cached_chunk
+        else:
+            while not prediction or re.search(self.incomplete_pause_regex, prediction):
+                cached_chunk = self._release_cached_response_chunk()
+                if cached_chunk is not None:
+                    prediction += cached_chunk
+                else:
+                    stopping_criteria = self.pause_regex if not prediction else self.end_pause_regex
+                    prediction += self._generate(f"{self.sequence}{prediction}", stopping_criteria=stopping_criteria)
         prediction_lstrip = prediction.lstrip()
 
         # If prediction is a turn switch to agent, switch to the agent and output the prediction:
@@ -439,8 +526,10 @@ class RealtimeAgentMultiprocessing:
                 if self.output_sequence and sequence_changed:
                     max_length = 0 if self.output_sequence_max_length is None else self.output_sequence_max_length
                     self.sequence_queue.put(agent.sequence[-max_length:])
-            except:
+            except Exception as ex:
                 #TODO: logging here
+                raise ex
+                print(ex)
                 pass
             sleep(0.05)
 

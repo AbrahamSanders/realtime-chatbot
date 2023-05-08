@@ -164,7 +164,7 @@ class TTSHandlerMultiprocessing:
                             pause_value = float(re.search(self.pause_value_regex, input_seg)[1])
                             if not pause_value > 0.0:
                                 continue
-                            print(f"Rendering pause: {input_seg}")
+                            print(f"TTS: Rendering pause: {input_seg}")
                             rate = 22050 // config.downsampling_factor
                             blank_wav = torch.zeros(int(rate * pause_value), dtype=torch.float32).numpy()
                             self.output_queue.put((rate, blank_wav))
@@ -172,9 +172,9 @@ class TTSHandlerMultiprocessing:
                             # In case of non-pause text, convert the text to speech
                             input_seg = self.sanitize_text_for_tts(input_seg, config.tts_engine)
                             if not input_seg or not re.sub("[. ]", "", input_seg):
-                                print(f"Skipping: {input_seg}")
+                                print(f"TTS: Skipping: {input_seg}")
                                 continue
-                            print(f"Rendering: {input_seg}")
+                            print(f"TTS: Rendering: {input_seg}")
                             if config.tts_engine == "fastspeech2":
                                 speaker_id = int(config.speaker.split()[-1])-1
                                 sample = TTSHubInterface.get_model_input(tts_task, input_seg, speaker=speaker_id)

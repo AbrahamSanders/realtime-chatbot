@@ -57,7 +57,7 @@ class RealtimeAgentGradioInterface:
                 dialogue_unflattened[-1][1] += utt
         return dialogue_unflattened
 
-    def execute(self, state, audio, summary, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
+    def execute(self, state, audio, summary, reset, agent_interval, similarity_threshold, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
                 asr_max_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
                 user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
@@ -76,7 +76,9 @@ class RealtimeAgentGradioInterface:
             random_state=self.args.random_state, 
             summary=summary,
             prevent_special_token_generation=self.args.prevent_special_token_generation,
-            add_special_pause_token=self.args.add_special_pause_token
+            add_special_pause_token=self.args.add_special_pause_token,
+            predictive_lookahead=similarity_threshold < 1.0,
+            similarity_threshold=similarity_threshold
         )
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
@@ -125,6 +127,7 @@ class RealtimeAgentGradioInterface:
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
 
         agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.7, step=0.1, label="Agent prediction interval")
+        similarity_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.8, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable)")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
@@ -179,6 +182,7 @@ class RealtimeAgentGradioInterface:
                 summary_textbox,
                 reset_button,
                 agent_interval_slider,
+                similarity_threshold_slider,
                 tts_downsampling_factor_slider,
                 tts_buffer_size_slider,
                 tts_enhancement_dropdown,

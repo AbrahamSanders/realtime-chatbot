@@ -40,6 +40,9 @@ class TopPProbsWarper(LogitsWarper):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         sorted_probs, sorted_indices = torch.sort(scores, descending=False)
         cumulative_probs = sorted_probs.cumsum(dim=-1)
+        
+        # scores may be selected from the top-k of the distribution, so fill in the missing probability mass
+        cumulative_probs += 1.0-cumulative_probs[:, -1:]
 
         # Remove tokens with cumulative top_p above the threshold (token with 0 are kept)
         sorted_indices_to_remove = cumulative_probs <= (1 - self.top_p)
