@@ -89,14 +89,13 @@ class AnchoredDistillingTrainer(Trainer):
 
         # get anchor logits & hidden states at last layer
         with torch.no_grad():
+            anchor_position_mask = position_mask.clone().to(self.anchor_model.device)
             anchor_outputs = self.anchor_model(input_ids = inputs.input_ids.to(self.anchor_model.device), 
                                                attention_mask = inputs.attention_mask.to(self.anchor_model.device),
                                                output_hidden_states=True,
                                                return_dict=True)
-            anchor_logits = anchor_outputs.logits.to(lm_logits.device)
-            anchor_logits = anchor_logits[position_mask].contiguous()
-            anchor_hidden_states = anchor_outputs.hidden_states[-1].to(lm_logits.device)
-            anchor_hidden_states = anchor_hidden_states[position_mask]
+            anchor_logits = anchor_outputs.logits[anchor_position_mask].to(lm_logits.device).contiguous()
+            anchor_hidden_states = anchor_outputs.hidden_states[-1][anchor_position_mask].to(lm_logits.device)
 
         # get anchor weights for each token (e.g., how much should we apply the KL & cosine losses for each token?)
         # and also get lm weights for each token (e.g. how much should we apply crossentropy supervision for each token?)

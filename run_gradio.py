@@ -15,12 +15,14 @@ class RealtimeAgentGradioInterface:
         device_map = device_helpers.get_device_map()
         self.tts_handler = TTSHandlerMultiprocessing(
             wait_until_running=False,
+            config=TTSConfig(tts_engine=self.args.tts_engine),
             device=device_map["tts"]
         )
         self.agent = RealtimeAgentMultiprocessing(
             wait_until_running=False,
             config=RealtimeAgentConfig(random_state=self.args.random_state, 
-                                       prevent_special_token_generation=self.args.prevent_special_token_generation),
+                                       prevent_special_token_generation=self.args.prevent_special_token_generation,
+                                       add_special_pause_token=self.args.add_special_pause_token),
             modelpath=self.args.agent_modelpath,
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
@@ -55,7 +57,7 @@ class RealtimeAgentGradioInterface:
                 dialogue_unflattened[-1][1] += utt
         return dialogue_unflattened
 
-    def execute(self, state, audio, summary, reset, agent_interval, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
+    def execute(self, state, audio, summary, reset, agent_interval, similarity_threshold, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
                 asr_max_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
                 user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
@@ -66,15 +68,24 @@ class RealtimeAgentGradioInterface:
             state["asr_config"] = asr_config
             self.asr_handler.queue_config(asr_config)
 
-        agent_config = RealtimeAgentConfig(interval=agent_interval, identities={
-            "S1": Identity(user_name, user_age, user_sex),
-            "S2": Identity(agent_name, agent_age, agent_sex)
-        }, random_state=self.args.random_state, summary=summary)
+        agent_config = RealtimeAgentConfig(
+            interval=agent_interval, identities={
+                "S1": Identity(user_name, user_age, user_sex),
+                "S2": Identity(agent_name, agent_age, agent_sex)
+            }, 
+            random_state=self.args.random_state, 
+            summary=summary,
+            prevent_special_token_generation=self.args.prevent_special_token_generation,
+            add_special_pause_token=self.args.add_special_pause_token,
+            predictive_lookahead=similarity_threshold < 1.0,
+            similarity_threshold=similarity_threshold
+        )
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
             self.agent.queue_config(agent_config)
 
-        tts_config = TTSConfig(buffer_size=tts_buffer_size, downsampling_factor=tts_downsampling_factor, 
+        tts_config = TTSConfig(tts_engine=self.args.tts_engine, buffer_size=tts_buffer_size, 
+                               downsampling_factor=tts_downsampling_factor, 
                                speaker=agent_voice, enhancement_model=tts_enhancement)
         if tts_config != state["tts_config"]:
             state["tts_config"] = tts_config
@@ -113,9 +124,10 @@ class RealtimeAgentGradioInterface:
         description = "Just click 'Record', uncheck 'Reset', and start talking! ---- (Agent: Meta OPT 2.7b; " \
                       "ASR: OpenAI Whisper; TTS: Meta FastSpeech2)"
 
-        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
+        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='base.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=1.0, default=0.6, step=0.1, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.8, step=0.1, label="Agent prediction interval")
+        similarity_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.8, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable)")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
         tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
@@ -144,16 +156,19 @@ class RealtimeAgentGradioInterface:
             choices=[default_identities["S2"].sex, "male", "female"], 
             default=default_identities["S2"].sex, label="Agent Gender"
         )
-        agent_voice_dropdown = gr.inputs.Dropdown(
-            type="index",
-            choices=[f"Voice {i+1}" for i in range(200)],
-            default="Voice 16", label="Agent Voice"
+        agent_voice_dropdown = gr.Dropdown(
+            choices=self.tts_handler.available_speakers, 
+            value=self.tts_handler.available_speakers[0],
+            label="Agent Voice"
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
         reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)",
                                    elem_id="reset_button")
-        summary_textbox = gr.inputs.Textbox(label="Dialogue Summary")
+        summary_textbox = gr.inputs.Textbox(
+            label="Dialogue Summary", 
+            default="S1 and S2 are talking about what's new in their lives."
+        )
         
         state = gr.State({
             "dialogue": [], 
@@ -170,6 +185,7 @@ class RealtimeAgentGradioInterface:
                 summary_textbox,
                 reset_button,
                 agent_interval_slider,
+                similarity_threshold_slider,
                 tts_downsampling_factor_slider,
                 tts_buffer_size_slider,
                 tts_enhancement_dropdown,
@@ -201,8 +217,7 @@ class RealtimeAgentGradioInterface:
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
-    parser.add_argument("--prevent-special-token-generation", action="store_true",
-                        help="Use with base OPT model for zero-shot inference. (default: %(default)s)")
+    parser.add_argument("--tts-engine", type=str, default="fastspeech2", help="TTS engine to use")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")

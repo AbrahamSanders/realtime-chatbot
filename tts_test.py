@@ -1,5 +1,6 @@
 import gradio as gr
 import torch
+import argparse
 from time import sleep
 from datetime import datetime
 
@@ -7,6 +8,7 @@ from realtime_chatbot.utils import audio_helpers
 from realtime_chatbot.tts_handler import TTSHandlerMultiprocessing, TTSConfig
 from realtime_chatbot.speech_enhancer import SpeechEnhancer
 
+tts_engine = None
 tts_handler = None
 speech_enhancer = None
 
@@ -14,6 +16,7 @@ def _synthesize_handler(text, buffer_size):
     text_parts = text.split("|")
     audio_parts = []
     for i, part in enumerate(text_parts):
+        wait_secs = 3 if part.startswith("~") or part.startswith("*") else 60
         tts_handler.queue_input(part)
         if (i+1) % buffer_size == 0 or i == len(text_parts)-1:
             if i == len(text_parts)-1:
@@ -24,7 +27,7 @@ def _synthesize_handler(text, buffer_size):
             output = None
             while output is None:
                 output = tts_handler.next_output()
-                if (datetime.now()-start).total_seconds() > 10:
+                if (datetime.now()-start).total_seconds() > wait_secs:
                     break
                 sleep(0.001)
             if output is not None:
@@ -34,8 +37,8 @@ def _synthesize_handler(text, buffer_size):
 
 
 def process_text(text, buffer_size, voice, downsample_factor, duration_factor, pitch_factor, energy_factor):
-    tts_handler.queue_config(TTSConfig(buffer_size=buffer_size, speaker=voice, duration_factor=duration_factor, 
-                                       pitch_factor=pitch_factor, energy_factor=energy_factor))
+    tts_handler.queue_config(TTSConfig(tts_engine=tts_engine, buffer_size=buffer_size, speaker=voice, 
+                                       duration_factor=duration_factor, pitch_factor=pitch_factor, energy_factor=energy_factor))
     audio_parts = _synthesize_handler(text, buffer_size)
     if not audio_parts:
         return None, None, None, None, None
@@ -62,9 +65,20 @@ def process_text(text, buffer_size, voice, downsample_factor, duration_factor, p
            (sr_enhanced_metricgan, wav_enhanced_metricgan)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser("TTS Test")
+    parser.add_argument("--tts-engine", type=str, default="fastspeech2", help="TTS engine to use")
+    args = parser.parse_args()
+
+    print("\nRunning with arguments:")
+    print(args)
+    print()
+
+    tts_engine = args.tts_engine
+    
     device = torch.device("cuda")
     tts_handler = TTSHandlerMultiprocessing(
         device=device,
+        config=TTSConfig(tts_engine=tts_engine),
         wait_until_running=True
     )
 
@@ -76,9 +90,9 @@ if __name__ == "__main__":
             "text",
             gr.Slider(1, 5, value=1, step=1),
             gr.Dropdown(
-                type="index",
-                choices=[f"Voice {i+1}" for i in range(200)],
-                value="Voice 16", label="Voice"
+                choices=tts_handler.available_speakers, 
+                value=tts_handler.available_speakers[0],
+                label="Voice"
             ),
             gr.Slider(1, 6, value=1, step=1),
             gr.Slider(-5, 5, value=1, step=0.1),

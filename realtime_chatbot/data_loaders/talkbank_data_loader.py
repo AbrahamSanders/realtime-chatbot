@@ -2,15 +2,20 @@ import pylangacq
 import re
 import torch
 import math
+import random
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
 
 class TalkbankDataLoader:
     def __init__(self, max_utterance_words=150, max_history_words=500, min_overlap_words=100, 
-                 summarization_modelname=None):
+                 max_participants=4, standardize_pauses=False, add_special_pause_token=False, 
+                 summarization_modelname=None, random_state=None):
         self.max_utterance_words = max_utterance_words
         self.max_history_words = max_history_words
         self.min_overlap_words = min_overlap_words
+        self.max_participants = max_participants
+        self.standardize_pauses = standardize_pauses
+        self.add_special_pause_token = add_special_pause_token
         self.corpora_urls = {
             "CABNC": "https://ca.talkbank.org/data/CABNC.zip",
             "CallFriend_eng_n": "https://ca.talkbank.org/data/CallFriend/eng-n.zip",
@@ -19,7 +24,8 @@ class TalkbankDataLoader:
             "GCSAusE": "https://ca.talkbank.org/data/GCSAusE.zip",
             "ISL": "https://ca.talkbank.org/data/ISL.zip",
             "MICASE": "https://ca.talkbank.org/data/MICASE.zip",
-            "SCoSE": "https://ca.talkbank.org/data/SCoSE.zip"
+            "SCoSE": "https://ca.talkbank.org/data/SCoSE.zip",
+            "SBCSAE": "https://ca.talkbank.org/data/SBCSAE.zip"
         }
         self.summ_model = None
         if summarization_modelname is not None:
@@ -32,14 +38,14 @@ class TalkbankDataLoader:
                 return_text=True,
                 device = 0 if torch.cuda.is_available() else -1
             )
-            
+        self.random_state = random_state
     
     def clean_line(self, line):
         # convert 'hello [!]' to 'hello!'
         line = re.sub(r" \[!\]", "!", line)
         # get rid of bracketed sequences that don't contain a comment or sound
         line = re.sub(r"\[[^%\]].*?\]", "", line)
-        # get rid of timestamp
+        # get rid of timestamp TODO: extract pauses from timestamp differences.
         line = re.sub(r"\d+?_\d+?", "", line)
         # get rid of +" and +,
         line = re.sub(r'\+[",]', "", line)
@@ -53,6 +59,16 @@ class TalkbankDataLoader:
         line = re.sub(r"[^\w !?.,;\"'`()&=%\[\]]", "", line)
         # get rid of ʔ which is somehow a word character 
         line = re.sub("ʔ", "", line)
+        # get rid of "Long Events" notation and other specialized &= notations
+        line = re.sub(r"&[l,n]=.+?(?=(?:\s|\Z))", "", line)
+        line = re.sub(r"&=(?:lengthened|tsk|in|nonvocal|ex)(?=(?:\s|\Z))", "", line, flags=re.IGNORECASE)
+        # standardize pauses (if enabled). e.g., convert (.) to a value up to (0.3), (..) to a value up to (0.6), etc. 
+        if self.standardize_pauses:
+            line = re.sub(r"\(\.\)", lambda _: f"({random.uniform(0.2, 0.6):.1f})", line)
+            line = re.sub(r"\(\.\.\)", lambda _: f"({random.uniform(0.7, 1.2):.1f})", line)
+        # add special pause token before pauses
+        if self.add_special_pause_token:
+            line = re.sub(r"\((?=\d*?\.\d*?\))", "<p> (", line)
         # normalize sequences of spaces to a single space
         line = re.sub(" {2,}", " ", line)
         # close punctuation and contractions that have an extra space
@@ -68,21 +84,28 @@ class TalkbankDataLoader:
         part_str = ""
         part_map = {}
         for i, item in enumerate(participants.items()):
+            if self.max_participants and i == self.max_participants:
+                part_str += f"... (additional {len(participants)-self.max_participants} participants not shown)"
             part, info = item
             part_map[part] = f"S{i+1}"
-            part_str += f"<participant> {part_map[part]} ("
-            for info_key in ("name", "age", "sex"):
-                default_value = "unknown"
-                value = info[info_key]
-                if info_key == "name" and value.lower() in ["male", "female"]:
-                    info["sex"] = value.lower()
-                    value = default_value
-                if info_key == "age" and ";" in value:
-                    value = value[:value.index(";")]
-                part_str += f"{info_key}: {value if value else default_value}, "
-            part_str = part_str.rstrip(", ")
-            part_str += ") "
-        return part_str.rstrip(), part_map
+            if not self.max_participants or i < self.max_participants:
+                part_str += f"{part_map[part]} ("
+                for info_key in ("name", "age", "sex"):
+                    default_value = "unknown"
+                    value = info[info_key]
+                    if info_key == "name": 
+                        value = value.lower()
+                        if value in ["male", "female"]:
+                            info["sex"] = value
+                            value = default_value
+                        elif value:
+                            value = f"{value[0].upper()}{value[1:]}"
+                    if info_key == "age" and ";" in value:
+                        value = value[:value.index(";")]
+                    part_str += f"{info_key}: {value if value else default_value}, "
+                part_str = part_str.rstrip(", ")
+                part_str += "), "
+        return part_str.rstrip(", "), part_map
     
     def get_utterances_str(self, utterances, part_map, start):
         cleaned_utts = []
@@ -94,6 +117,9 @@ class TalkbankDataLoader:
             
             # clean the utterance and prepend the speaker
             clean_utt = self.clean_line(utt.tiers[utt.participant])
+            # some corpora have blank utterances in the format e.g., S1: 0. Skip these.
+            if clean_utt in [".", "0."]:
+                continue
             clean_utt = f"{part_map[utt.participant]}: {clean_utt}"
             
             # count the words and truncate if too long
@@ -128,9 +154,9 @@ class TalkbankDataLoader:
     
     def prepare_utterances_for_summary(self, utts_str):
         # remove breathing or unintelligibility annotations (e.g., hhh, xxx)
-        utts_str = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", utts_str)
+        utts_str = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", utts_str, flags=re.IGNORECASE)
         # remove pauses
-        utts_str = re.sub(r"\(\d*?\.\d*?\)", "", utts_str)
+        utts_str = re.sub(r"(?:<p> )?\(\d*?\.\d*?\)", "", utts_str)
         # remove ':' speech emphasis annotations
         utts_str = re.sub(r"(?<=[^\d]):", "", utts_str)
         # remove empty utterances (that are now empty because of the above rules)
@@ -142,6 +168,9 @@ class TalkbankDataLoader:
         return utts_str
 
     def load_data(self, corpora="All", exclude=None):
+        if self.random_state is not None:
+            random.seed(self.random_state)
+            
         if isinstance(corpora, str):
             if corpora == "All":
                 corpora = list(self.corpora_urls)
@@ -163,17 +192,17 @@ class TalkbankDataLoader:
             
             for header, utterances in tqdm(zip(all_headers, all_utterances), desc="Files"):
                 part_str, part_map = self.get_participants_str(header)
-                prefix = f"{part_str} <dialog> "
-                
                 start = 0
                 while start is not None:
                     utts_str, start = self.get_utterances_str(utterances, part_map, start)
                     if len(utts_str) > 0:
+                        summary = None
                         if self.summ_model is not None:
                             utts_str_for_summary = self.prepare_utterances_for_summary(utts_str)
                             summary_max_length = max(self.summ_model.model.config.max_length, 
-                                                     math.ceil(len(utts_str_for_summary.split()) / 4))
+                                                     math.ceil(len(utts_str_for_summary.split()) / 5))
                             summary = self.summ_model(utts_str_for_summary, max_length=summary_max_length, truncation=True)
                             summary = summary[0]["summary_text"]
-                            prefix = f"{part_str} <summary> {summary} <dialog> "
-                        yield f"{prefix}{utts_str}"
+                        yield f"Participants: {part_str}; " \
+                              + (f"Summary: {summary}; " if summary else "") \
+                              + f"Transcript: {utts_str}"

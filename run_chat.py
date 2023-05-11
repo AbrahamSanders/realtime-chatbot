@@ -3,6 +3,7 @@ from sshkeyboard import listen_keyboard, stop_listening
 from threading import Thread
 from queue import SimpleQueue
 from time import sleep
+import re
 
 from realtime_chatbot.utils import queue_helpers, args_helpers
 from realtime_chatbot.identity import Identity
@@ -50,9 +51,15 @@ def main():
     print()
 
     identities = configure_identities()
-    config = RealtimeAgentConfig(identities=identities, random_state=args.random_state)
+    config = RealtimeAgentConfig(
+        identities=identities, 
+        random_state=args.random_state,
+        prevent_special_token_generation=args.prevent_special_token_generation,
+        add_special_pause_token=args.add_special_pause_token
+    )
     agent = RealtimeAgentMultiprocessing(config=config, modelpath=args.agent_modelpath)
     listener = KeyboardListener()
+    cache_release_regex = re.compile(r"\*\[(\d+)\]")
     user_speaking = None
     print("\n\n>>>Running<<<\n\n")
     while True:
@@ -74,7 +81,10 @@ def main():
 
         # Agent output (if any)
         next_output = agent.next_output()
-        if next_output:
+        if next_output and not next_output.startswith("~"):
+            cache_release_prefix_match = re.match(cache_release_regex, next_output)
+            next_output = next_output[cache_release_prefix_match.end():] if cache_release_prefix_match \
+                else next_output.lstrip("*")
             if user_speaking is None or user_speaking:
                 user_speaking = False
                 print(f"\n{config.agent_identity}:", end="", flush=True)
