@@ -15,7 +15,7 @@ from .utils.generate_helpers import CompletionAndResponseStoppingCriteria
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat", device=None, use_fp16=True):
+    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, use_fp16=True):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
@@ -31,14 +31,14 @@ class RealtimeAgent_Resources:
 
         self.model = self.model.to(self.device)
 
-        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.7)
+        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
 
 class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
-                 interval=0.7, max_history_words=100, max_agent_pause_duration=10.0, 
+                 interval=0.8, max_history_words=100, max_agent_pause_duration=10.0, 
                  random_state=None, prevent_special_token_generation=False, summary=None,
                  add_special_pause_token=False, predictive_lookahead=True, similarity_threshold=0.8):
         if identities is None:
@@ -65,6 +65,7 @@ class PredictedCompletion:
         self.completion = None
         self.embedding = None
         self.response = None
+        self.response_speaker = None
 
 class RealtimeAgent:
     def __init__(self, resources=None, config=None):
@@ -328,27 +329,34 @@ class RealtimeAgent:
             completion_end_pos = input_ids.shape[-1] + completion_length
             prediction.completion = self.resources.tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:completion_end_pos], skip_special_tokens=False)
             prediction.response = self.resources.tokenizer.decode(outputs.sequences[0, completion_end_pos:], skip_special_tokens=False).rstrip(turn_switch_token)
+            response_speaker_match = re.search(self.any_identity_regex, prediction.response)
+            if response_speaker_match:
+                prediction.response = prediction.response[response_speaker_match.end()+1:]
+                prediction.response_speaker = response_speaker_match[0]
             is_turn_switch = True
             if completion_length > 0:
                 prediction.embedding = torch.cat([pos_states[-1] for pos_states in outputs.hidden_states[1:completion_length+1]], dim=1).mean(dim=1)
                 is_turn_switch = False
 
-        is_turn_switch_to_agent = is_turn_switch and prediction.response.lstrip().startswith(self.config.agent_identity)
-        return prediction, is_turn_switch_to_agent, similarity_with_last_pred
+        return prediction, is_turn_switch, similarity_with_last_pred
 
     def _cache_response(self, response):
+        #print(f"_cache_response called: '{response}'")
         self.response_cache.clear()
         # divide response into k chunks to be released one at a time at every agent interval
         response_tokens = self.resources.tokenizer.encode(response, add_special_tokens=False)
         chunk_size = self.generate_kwargs["max_new_tokens"]
-        num_chunks = math.ceil(len(response_tokens)/chunk_size)
+        num_chunks = math.ceil(len(response_tokens) / chunk_size)
         for i in range(num_chunks):
             chunk = self.resources.tokenizer.decode(response_tokens[i*chunk_size:(i+1)*chunk_size], skip_special_tokens=False)
             self.response_cache.append(chunk)
 
     def _release_cached_response_chunk(self):
         if len(self.response_cache) > 0:
-            return self.response_cache.popleft()
+            released_chunk = self.response_cache.popleft()
+            #print (f"_release_cached_response_chunk called: '{released_chunk}'")
+            return released_chunk
+        #print ("_release_cached_response_chunk called: None")
         return None
 
     def reset(self):
@@ -399,24 +407,27 @@ class RealtimeAgent:
         self._trim_sequence()
 
         prediction = ""
+        num_cached_chunks_released = 0
         if self.config.predictive_lookahead and self.current_speaker != self.config.agent_identity:
-            self.last_prediction, is_turn_switch_to_agent, similarity_with_last_pred = self._predict_completion(self.last_prediction)
-            print(f"Lookahead completion '{self.last_prediction.completion}'; "
-                  f"Similarity with last prediction: {similarity_with_last_pred:.3f}")
+            self.last_prediction, is_turn_switch, similarity_with_last_pred = self._predict_completion(self.last_prediction)
+            is_predicted_agent_response = self.last_prediction.response_speaker == self.config.agent_identity
             if similarity_with_last_pred < self.config.similarity_threshold:
-                print(f"Caching lookahead response: '{self.last_prediction.response}'")
                 self._cache_response(self.last_prediction.response)
-            if is_turn_switch_to_agent:
-                print("Releasing cached lookahead response...")
-                cached_chunk = self._release_cached_response_chunk()
-                if cached_chunk is not None:
-                    prediction = cached_chunk
+                # only release the predicted response for downstream caching if it is an agent response
+                if is_predicted_agent_response:
+                    # ~ indicates a response candidate to be chunked, pre-cached, and released later 
+                    # by downstream processors (e.g., TTS handler)
+                    output = f"~[{len(self.response_cache)}]{self.last_prediction.response}"
+            if is_turn_switch and is_predicted_agent_response:
+                self._set_current_speaker(self.config.agent_identity)
         else:
             while not prediction or re.search(self.incomplete_pause_regex, prediction):
                 cached_chunk = self._release_cached_response_chunk()
                 if cached_chunk is not None:
+                    num_cached_chunks_released += 1
                     prediction += cached_chunk
                 else:
+                    num_cached_chunks_released = 0
                     stopping_criteria = self.pause_regex if not prediction else self.end_pause_regex
                     prediction += self._generate(f"{self.sequence}{prediction}", stopping_criteria=stopping_criteria)
         prediction_lstrip = prediction.lstrip()
@@ -437,9 +448,11 @@ class RealtimeAgent:
         # If prediction is not a turn switch and the agent is currently speaking, output the prediction,
         # otherwise suppress the prediction (output nothing):
         elif self.current_speaker == self.config.agent_identity:
-            output = re.search(self.speaker_continue_regex, prediction)[0]
+            agent_continuation = re.search(self.speaker_continue_regex, prediction)
+            if agent_continuation:
+                output = agent_continuation[0]
 
-        if output:
+        if output and not output.startswith("~"):
             # suppress anything that comes after a turn switch prediction (including an incomplete one at the end).
             # turn switch predictions must be the first thing in the prediction in order to be processed.
             identity_match = re.search(self.any_identity_with_incomplete_regex, output)
@@ -460,11 +473,16 @@ class RealtimeAgent:
                 pause_prefix = "<p> " if self.config.add_special_pause_token else ""
                 output = f" {pause_prefix}({self.agent_pause_duration:.1f})"
 
+            if num_cached_chunks_released > 0:
+                # * indicates to downstream processors (e.g., TTS handler) that this output represents a cached response chunk
+                # that should be released from cache instead of rendered from scratch
+                output = f"*[{num_cached_chunks_released}]{output}"
+
         #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")
         return output, sequence_changed
 
 class RealtimeAgentMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/opt-2.7b-realtime-chat",
+    def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2",
                  device=None, chain_to_input_queue=None, output_sequence=False, output_sequence_max_length=None):
         import multiprocessing as mp
         from ctypes import c_bool
@@ -528,9 +546,8 @@ class RealtimeAgentMultiprocessing:
                     self.sequence_queue.put(agent.sequence[-max_length:])
             except Exception as ex:
                 #TODO: logging here
-                raise ex
                 print(ex)
-                pass
+                #raise ex
             sleep(0.05)
 
     def queue_config(self, config):

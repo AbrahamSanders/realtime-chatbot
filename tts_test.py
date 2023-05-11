@@ -16,6 +16,7 @@ def _synthesize_handler(text, buffer_size):
     text_parts = text.split("|")
     audio_parts = []
     for i, part in enumerate(text_parts):
+        wait_secs = 3 if part.startswith("~") or part.startswith("*") else 60
         tts_handler.queue_input(part)
         if (i+1) % buffer_size == 0 or i == len(text_parts)-1:
             if i == len(text_parts)-1:
@@ -26,7 +27,7 @@ def _synthesize_handler(text, buffer_size):
             output = None
             while output is None:
                 output = tts_handler.next_output()
-                if (datetime.now()-start).total_seconds() > 60:
+                if (datetime.now()-start).total_seconds() > wait_secs:
                     break
                 sleep(0.001)
             if output is not None:

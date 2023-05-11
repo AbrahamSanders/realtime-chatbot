@@ -8,7 +8,7 @@ from .utils import queue_helpers
 from .utils import audio_helpers
 
 class ASRConfig:
-    def __init__(self, model_size = 'small.en', lang="English", n_context_segs=1, n_prefix_segs=1, 
+    def __init__(self, model_size = 'base.en', lang="English", n_context_segs=1, n_prefix_segs=1, 
                  compression_ratio_threshold=2.4, logprob_threshold=-0.7, no_speech_threshold=0.6, 
                  max_buffer_size=5):
         self.model_size = model_size
@@ -199,9 +199,10 @@ class ASRHandlerMultiprocessing:
                         if len(last_n_segs) == last_n_segs.maxlen:
                             last_n_segs.popleft()
                         last_n_segs.append((next_input, transcription_text))
-            except:
+            except Exception as ex:
                 #TODO: logging here
-                pass
+                print(ex)
+                #raise ex
             sleep(0.05)
 
     def queue_config(self, config):

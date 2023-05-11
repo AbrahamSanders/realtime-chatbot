@@ -124,9 +124,9 @@ class RealtimeAgentGradioInterface:
         description = "Just click 'Record', uncheck 'Reset', and start talking! ---- (Agent: Meta OPT 2.7b; " \
                       "ASR: OpenAI Whisper; TTS: Meta FastSpeech2)"
 
-        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='small.en')
+        asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='base.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.7, step=0.1, label="Agent prediction interval")
+        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.8, step=0.1, label="Agent prediction interval")
         similarity_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.8, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable)")
 
         tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
@@ -165,7 +165,10 @@ class RealtimeAgentGradioInterface:
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
         reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)",
                                    elem_id="reset_button")
-        summary_textbox = gr.inputs.Textbox(label="Dialogue Summary")
+        summary_textbox = gr.inputs.Textbox(
+            label="Dialogue Summary", 
+            default="S1 and S2 are talking about what's new in their lives."
+        )
         
         state = gr.State({
             "dialogue": [], 
