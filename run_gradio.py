@@ -121,8 +121,8 @@ class RealtimeAgentGradioInterface:
     
     def launch(self):
         title = "Real-time Dialogue Agent"
-        description = "Just click 'Record', uncheck 'Reset', and start talking! ---- (Agent: Meta OPT 2.7b; " \
-                      "ASR: OpenAI Whisper; TTS: Meta FastSpeech2)"
+        description = "Just click 'Record', uncheck 'Reset', and start talking! ---- (Agent: OPT 2.7b; " \
+                      f"ASR: whisper; TTS: {self.args.tts_engine})"
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='base.en')
 
