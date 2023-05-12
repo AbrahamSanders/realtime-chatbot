@@ -198,7 +198,7 @@ class FastSpeech2TTSHandler(TTSHandler):
         return wav, rate
     
 class BarkTTSHandler(TTSHandler):
-    def __init__(self, device=None, config=None):
+    def __init__(self, device=None, config=None, condition_on_previous_generation=True, reset_prev_conditioning_after=5):
         super().__init__(device, config, handle_pauses=False)
 
         from bark import SAMPLE_RATE
@@ -215,8 +215,11 @@ class BarkTTSHandler(TTSHandler):
         self.speaker_history_prompt = dict(
             _load_history_prompt(self.bark_prompt_lookup[config.speaker.replace("/", os.path.sep)])
         )
+        self.condition_on_previous_generation = condition_on_previous_generation
+        self.reset_prev_conditioning_after = reset_prev_conditioning_after
         self.last_segment = ""
         self.last_generated_tokens = None
+        self.num_consecutive_prev_conditioning = 0
 
     def _sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "...", text)
@@ -232,9 +235,17 @@ class BarkTTSHandler(TTSHandler):
         return text
 
     def _generate_audio(self, segment):
-        gen_input = " ".join([self.last_segment, segment]).lstrip()
+        if self.condition_on_previous_generation and self.num_consecutive_prev_conditioning < self.reset_prev_conditioning_after:
+            self.num_consecutive_prev_conditioning += 1
+            gen_input = " ".join([self.last_segment, segment]).lstrip()
+            prefix_prompt = self.last_generated_tokens
+        else:
+            self.num_consecutive_prev_conditioning = 0
+            gen_input = segment
+            prefix_prompt = None
+        
         self.last_generated_tokens, wav = self.generate_audio(
-            gen_input, history_prompt=self.speaker_history_prompt, prefix_prompt=self.last_generated_tokens,
+            gen_input, history_prompt=self.speaker_history_prompt, prefix_prompt=prefix_prompt,
             text_temp=0.7, waveform_temp=0.7, silent=True, output_full=True, min_eos_p=0.05, 
             max_gen_duration_s=max(1.0, len(segment.split()) / 1.25)
         )
@@ -250,6 +261,7 @@ class BarkTTSHandler(TTSHandler):
             )
             self.last_segment = ""
             self.last_generated_tokens = None
+            self.num_consecutive_prev_conditioning = 0
         super().set_config(config)
 
     @staticmethod
