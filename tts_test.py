@@ -49,6 +49,12 @@ def process_text(text, buffer_size, voice, downsample_factor, duration_factor, p
     wav_downsample, _ = audio_helpers.downsample(wav_tensor, sr, sr_downsample)
     wav_downsample = wav_downsample.numpy()
     
+    wav_denoised, sr_denoised = speech_enhancer.enhance("denoiser", wav_tensor, sr)
+    wav_denoised = wav_denoised.cpu().numpy()
+
+    wav_noisereduced, sr_noisereduced = speech_enhancer.enhance("noisereduce-nonstationary", wav_tensor, sr)
+    wav_noisereduced = wav_noisereduced.cpu().numpy()
+
     wav_sources, sr_sources = speech_enhancer.enhance("sepformer-whamr-enhancement", wav_tensor, sr)
     wav_sources = wav_sources.cpu().numpy()
 
@@ -58,11 +64,17 @@ def process_text(text, buffer_size, voice, downsample_factor, duration_factor, p
     wav_enhanced_metricgan, sr_enhanced_metricgan = speech_enhancer.enhance("metricgan-plus-voicebank", wav_tensor, sr)
     wav_enhanced_metricgan = wav_enhanced_metricgan.cpu().numpy()
 
+    wav_enhanced_frcrn, sr_enhanced_frcrn = speech_enhancer.enhance("damo/speech_frcrn_ans_cirm_16k", wav_tensor, sr)
+    wav_enhanced_frcrn = wav_enhanced_frcrn.cpu().numpy()
+
     return (sr, wav_tensor.cpu().numpy()), \
            (sr_downsample, wav_downsample), \
+           (sr_denoised, wav_denoised), \
+           (sr_noisereduced, wav_noisereduced), \
            (sr_sources, wav_sources), \
            (sr_enhanced_mtl, wav_enhanced_mtl), \
-           (sr_enhanced_metricgan, wav_enhanced_metricgan)
+           (sr_enhanced_metricgan, wav_enhanced_metricgan), \
+           (sr_enhanced_frcrn, wav_enhanced_frcrn)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("TTS Test")
@@ -102,9 +114,12 @@ if __name__ == "__main__":
         outputs=[
             gr.Audio(label="Control"),
             gr.Audio(label="Control (downsampled)"),
+            gr.Audio(label="Experimental (denoiser)"),
+            gr.Audio(label="Experimental (noisereduce nonstationary)"),
             gr.Audio(label="Experimental (sepformer WHAMR! separation)"),
             gr.Audio(label="Experimental (Spectral Feature Mapping with mimic)"),
-            gr.Audio(label="Experimental (MetricGAN+)")
+            gr.Audio(label="Experimental (MetricGAN+)"),
+            gr.Audio(label="Experimental (FRCRN)")
         ],
         allow_flagging='never',
         title="TTS Test",
