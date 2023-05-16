@@ -15,7 +15,8 @@ from .utils.generate_helpers import CompletionAndResponseStoppingCriteria
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, use_fp16=True):
+    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, 
+                 use_fp16=True, override_contrastive_search=True):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
@@ -31,7 +32,8 @@ class RealtimeAgent_Resources:
 
         self.model = self.model.to(self.device)
 
-        self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
+        if override_contrastive_search:
+            self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
@@ -85,7 +87,7 @@ class RealtimeAgent:
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
-            "max_new_tokens": 5,
+            "max_new_tokens": 7,
             "penalty_alpha": 0.1, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
             "top_k": 8
         }
@@ -321,7 +323,7 @@ class RealtimeAgent:
             stopping_criteria = StoppingCriteriaList([CompletionAndResponseStoppingCriteria(turn_switch_token_id)])
             _, outputs = self._generate(
                 input_ids, stopping_criteria=stopping_criteria, 
-                return_generate_output=True, output_hidden_states=True, max_new_tokens=50
+                return_generate_output=True, output_hidden_states=True, max_new_tokens=80
             )
             prediction = PredictedCompletion()
             prediction.context_pos = len(self.sequence)
@@ -420,6 +422,14 @@ class RealtimeAgent:
                     output = f"~[{len(self.response_cache)}]{self.last_prediction.response}"
             if is_turn_switch and is_predicted_agent_response:
                 self._set_current_speaker(self.config.agent_identity)
+                if output is None:
+                    #TODO: refactor to combine logic with lower block
+                    while not prediction or re.search(self.incomplete_pause_regex, prediction):
+                        cached_chunk = self._release_cached_response_chunk()
+                        if cached_chunk is None:
+                            break
+                        num_cached_chunks_released += 1
+                        prediction += cached_chunk
         else:
             while not prediction or re.search(self.incomplete_pause_regex, prediction):
                 cached_chunk = self._release_cached_response_chunk()
