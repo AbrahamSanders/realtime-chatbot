@@ -1,5 +1,6 @@
 import argparse
 from os import path
+from itertools import chain
 
 from realtime_chatbot.data_loaders.talkbank_data_loader import TalkbankDataLoader
 from sklearn.model_selection import train_test_split
@@ -25,11 +26,14 @@ def main():
         summarization_modelname=args.summarization_modelname, 
         random_state=args.seed
     )
-    examples = list(loader.load_data(corpora=args.corpora, exclude="MICASE.+?(?:lab500su044|ofc301mu021)"))
+    dialogues = list(loader.load_data(corpora=args.corpora, exclude="MICASE.+?(?:lab500su044|ofc301mu021)", group_by_dialogue=True))
     
-    train_examples, test_examples = train_test_split(examples, test_size=args.test_proportion, random_state=args.seed)
-    train_examples, dev_examples = train_test_split(train_examples, test_size=args.dev_proportion, random_state=args.seed)
-    
+    train_dialogues, test_dialogues = train_test_split(dialogues, test_size=args.test_proportion, random_state=args.seed)
+    train_dialogues, dev_dialogues = train_test_split(train_dialogues, test_size=args.dev_proportion, random_state=args.seed)
+    train_examples = list(chain(*train_dialogues))
+    dev_examples = list(chain(*dev_dialogues))
+    test_examples = list(chain(*test_dialogues))
+
     for split, split_examples in zip(("train", "dev", "test"), (train_examples, dev_examples, test_examples)):
         output_filename = path.join(args.data_dir, f"dataset_{split}.txt")
         with open(output_filename, "w", encoding="utf-8") as f:

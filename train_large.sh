@@ -7,26 +7,22 @@ python train.py \
     --per_device_train_batch_size=1 \
     --per_device_eval_batch_size=1 \
     --do_train \
-    --gradient_accumulation_steps=32 \
-    --output_dir=rtchat-2.7b \
+    --gradient_accumulation_steps=128 \
+    --output_dir=opt-2.7b-realtime-chat-v2-largebatch \
     --do_eval \
     --overwrite_output_dir \
     --seed=42 \
     --data_seed=42 \
-    --eval_steps=163 \
-    --logging_steps=10 \
+    --eval_steps=51 \
+    --logging_steps=2 \
     --save_total_limit=2 \
     --evaluation_strategy=steps \
     --lr_scheduler_type=linear \
     --num_train_epochs=4 \
-    --save_steps=163 \
+    --save_steps=51 \
     --learning_rate=5e-05 \
     --warmup_ratio=0.1 \
     --metric_for_best_model=eval_loss \
     --load_best_model_at_end \
     --dataloader_drop_last \
-    --gradient_checkpointing \
-    --use_anchor_model \
-    --anchor_loss_weight=0.5 \
-    --kl_div_temperature=1.0 \
-    --embed_cosine_loss_weight=0.5
+    --gradient_checkpointing

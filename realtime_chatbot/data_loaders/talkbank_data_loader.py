@@ -7,8 +7,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
 
 class TalkbankDataLoader:
-    def __init__(self, max_utterance_words=150, max_history_words=500, min_overlap_words=100, 
-                 max_participants=4, standardize_pauses=False, add_special_pause_token=False, 
+    def __init__(self, max_utterance_words=150, max_history_words=450, min_overlap_words=100, 
+                 max_participants=3, standardize_pauses=False, add_special_pause_token=False, 
                  summarization_modelname=None, random_state=None):
         self.max_utterance_words = max_utterance_words
         self.max_history_words = max_history_words
@@ -89,6 +89,12 @@ class TalkbankDataLoader:
             part, info = item
             part_map[part] = f"S{i+1}"
             if not self.max_participants or i < self.max_participants:
+                # this is a hack to deal with a bug in the CABNC corpus where the speaker info is wrong.
+                # it is very unlikely that there is a one-year-old baby boy in almost every transcript :)
+                if info["name"] == "Unknown_speaker" and info["age"] == "1;01.01" and info["sex"] == "male":
+                    info["name"] = info["age"] = info["sex"] = ""
+
+                # add the participant info to the participants string
                 part_str += f"{part_map[part]} ("
                 for info_key in ("name", "age", "sex"):
                     default_value = "unknown"
@@ -167,7 +173,7 @@ class TalkbankDataLoader:
         utts_str = re.sub(r"\s(?=S\d+?:)", "\n", utts_str)
         return utts_str
 
-    def load_data(self, corpora="All", exclude=None):
+    def load_data(self, corpora="All", exclude=None, group_by_dialogue=False):
         if self.random_state is not None:
             random.seed(self.random_state)
             
@@ -189,10 +195,12 @@ class TalkbankDataLoader:
             
             all_headers = reader.headers()
             all_utterances = reader.utterances(by_files=True)
-            
+                
             for header, utterances in tqdm(zip(all_headers, all_utterances), desc="Files"):
                 part_str, part_map = self.get_participants_str(header)
                 start = 0
+                if group_by_dialogue:
+                    dialogue = []
                 while start is not None:
                     utts_str, start = self.get_utterances_str(utterances, part_map, start)
                     if len(utts_str) > 0:
@@ -203,6 +211,12 @@ class TalkbankDataLoader:
                                                      math.ceil(len(utts_str_for_summary.split()) / 5))
                             summary = self.summ_model(utts_str_for_summary, max_length=summary_max_length, truncation=True)
                             summary = summary[0]["summary_text"]
-                        yield f"Participants: {part_str}; " \
-                              + (f"Summary: {summary}; " if summary else "") \
-                              + f"Transcript: {utts_str}"
+                        example = f"Participants: {part_str}; " \
+                                  + (f"Summary: {summary}; " if summary else "") \
+                                  + f"Transcript: {utts_str}"
+                        if group_by_dialogue:
+                            dialogue.append(example)
+                        else:
+                            yield example
+                if group_by_dialogue and len(dialogue) > 0:
+                    yield dialogue
