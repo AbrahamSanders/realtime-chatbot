@@ -11,6 +11,7 @@ from transformers.trainer_utils import set_seed
 from realtime_chatbot.utils import args_helpers
 from realtime_chatbot.realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
 from realtime_chatbot.dynamic_contrastive import get_contrastive_search_override
+from simctg_evaluation import measure_repetition_and_diversity
 
 speakers_in_prefix_regex = re.compile(r"S\d+(?= \(name:)")
 speakers_in_transcript_regex = re.compile(r"S\d+(?=:)")
@@ -35,18 +36,21 @@ def set_generate_kwargs(agent, decoding_type):
     }
     if decoding_type == "nucleus":
         agent.generate_kwargs["do_sample"] = True
-        agent.generate_kwargs["top_p"] = 0.8
+        agent.generate_kwargs["top_p"] = 0.95
     if "contrastive" in decoding_type:
-        agent.generate_kwargs["penalty_alpha"] = 0.5
+        agent.generate_kwargs["penalty_alpha"] = 0.6
         agent.generate_kwargs["top_k"] = 8
     if decoding_type == "dynamic_contrastive":
-        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.005, 0.6)
-    if decoding_type == "dynamic_contrastive_sampling":
-        # do_sample is not actually recognized by Generate for contrastive search. Setting it here to signal
-        # to the evaluation routine that we want to generate multiple samples (the override supports sampling
-        # but is not "officially" a sampling decoding type).
+        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.0, 1.0)
+    # do_sample is not actually recognized by Generate for contrastive search. Setting it here to signal
+    # to the evaluation routine that we want to generate multiple samples (the override supports sampling
+    # but is not "officially" a sampling decoding type).
+    if decoding_type == "contrastive_sampling":
         agent.generate_kwargs["do_sample"] = True
-        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.005, 1.0, sample_top_p=0.8)
+        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.6, 0.6, sample_top_p=0.8)
+    if decoding_type == "dynamic_contrastive_sampling":
+        agent.generate_kwargs["do_sample"] = True
+        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.0, 1.0, sample_top_p=0.8)
         
 def load_test_data(filename):
     with open(filename, "r", encoding="utf-8") as f:
@@ -68,10 +72,8 @@ def get_pause_examples(test_data, eval_mode, args):
         if len(pauses_in_transcript) == 0:
             continue
         transcript_words = transcript.split()
+        last_word = ""
         for i, word in enumerate(transcript_words):
-            # Skip the first word in the transcript, since it is always a speaker identity.
-            if i == 0:
-                continue
             word_pause_match = re.match(pauses_in_transcript_regex, word)
             transcript_history = f"{prefix}{' '.join(transcript_words[:i])}"
             # If we are at pause, this is a positive pause example.
@@ -81,7 +83,9 @@ def get_pause_examples(test_data, eval_mode, args):
                     positive_pause_examples.append(f"{transcript_history} {word_pause_match[0]}")
                 else:
                     positive_pause_examples.append((transcript_history, float(word_pause_match[1])))
-            else:
+            # Do not use the beginning or end of a turn as a negative pause example because these are common
+            # places for speakers to pause, even if not explicitly annotated.
+            elif not re.match(speakers_in_transcript_regex, word) and not re.match(speakers_in_transcript_regex, last_word):
                 if eval_mode == "ppl":
                     for pause_duration in (0.2, 0.5, 1.0):
                         pause_prefix = "<p> " if args.add_special_pause_token else ""
@@ -89,6 +93,7 @@ def get_pause_examples(test_data, eval_mode, args):
                         negative_pause_examples.append(f"{transcript_history} {pause}")
                 else:
                     negative_pause_examples.append((transcript_history, None))
+            last_word = word
     
     # sort examples by length for greater batch efficiency
     if eval_mode == "ppl":
@@ -147,6 +152,22 @@ def get_trp_examples(test_data, eval_mode, args):
     negative_trp_examples.sort(key=len, reverse=True)
     return positive_trp_examples, negative_trp_examples
 
+def get_response_examples(test_data):
+    response_examples = []
+    transcript_marker = "Transcript: "
+    for example in tqdm(test_data, desc="Preparing Response Examples"):
+        prefix, transcript = example.split(transcript_marker)
+        prefix += transcript_marker
+        transcript_words = transcript.split()
+        for i, word in enumerate(transcript_words):
+            if re.match(speakers_in_transcript_regex, word):
+                transcript_history = f"{prefix}{' '.join(transcript_words[:i+1])}"
+                response_examples.append(transcript_history)
+
+    # sort examples by length for greater batch efficiency
+    response_examples.sort(key=len, reverse=True)
+    return response_examples
+
 def get_losses(agent, examples, batch_size, from_last_idx_of_token_id, show_progress=True):
     losses = []
     for start_index in trange(0, len(examples), batch_size, desc="Computing Losses", disable=not show_progress):
@@ -172,9 +193,11 @@ def get_losses(agent, examples, batch_size, from_last_idx_of_token_id, show_prog
 
     return losses
 
-def generate_for_predictions(agent, example, do_sample, random_state, eos_token_id, max_new_tokens):
-    num_return_sequences = 5 if do_sample else 1
+def generate_for_predictions(agent, example, random_state, eos_token_id, max_new_tokens, multiple_samples=False):
+    num_return_sequences = 5 if multiple_samples else 1
     num_generate_calls = 1
+    do_sample = agent.generate_kwargs.get("do_sample", False)
+
     if do_sample and "penalty_alpha" in agent.generate_kwargs:
         # special case for dynamic contrastive search. Generate does not support do_sample=True or num_return_sequences > 1
         # for contrastive search, so we need to do multiple generate calls and pass do_sample=False 
@@ -200,10 +223,12 @@ def get_pause_predictions(agent, examples, decoding_type, random_state, show_pro
     pause_at_5_duration_errors = []
 
     set_generate_kwargs(agent, decoding_type)
-    do_sample = agent.generate_kwargs.get("do_sample", False)
+    multiple_samples = agent.generate_kwargs.get("do_sample", False)
     end_parens_token_id = agent.resources.tokenizer(")", add_special_tokens=False).input_ids[0]
     for example, target_duration in tqdm(examples, desc="Computing Pause Predictions", disable=not show_progress):
-        predictions = generate_for_predictions(agent, example, do_sample, random_state, eos_token_id=end_parens_token_id, max_new_tokens=7)
+        predictions = generate_for_predictions(
+            agent, example, random_state, eos_token_id=end_parens_token_id, max_new_tokens=7, multiple_samples=multiple_samples
+        )
         pause_at_1 = 0
         pause_at_1_duration_error = None
         pause_at_5 = 0
@@ -223,7 +248,7 @@ def get_pause_predictions(agent, examples, decoding_type, random_state, show_pro
         pause_at_1_preds.append(pause_at_1)
         if pause_at_1_duration_error is not None:
             pause_at_1_duration_errors.append(pause_at_1_duration_error)
-        if do_sample:
+        if multiple_samples:
             pause_at_5_preds.append(pause_at_5)
             if pause_at_5_duration_error is not None:
                 pause_at_5_duration_errors.append(pause_at_5_duration_error)
@@ -235,11 +260,13 @@ def get_trp_predictions(agent, examples, decoding_type, random_state, show_progr
     trp_at_5_preds = []
 
     set_generate_kwargs(agent, decoding_type)
-    do_sample = agent.generate_kwargs.get("do_sample", False)
+    multiple_samples = agent.generate_kwargs.get("do_sample", False)
     colon_token_id = agent.resources.tokenizer(":", add_special_tokens=False).input_ids[0]
     for example in tqdm(examples, desc="Computing TRP Predictions", disable=not show_progress):
         current_speaker = re.findall(speakers_in_transcript_regex, example)[-1]
-        predictions = generate_for_predictions(agent, example, do_sample, random_state, eos_token_id=colon_token_id, max_new_tokens=4)
+        predictions = generate_for_predictions(
+            agent, example, random_state, eos_token_id=colon_token_id, max_new_tokens=4, multiple_samples=multiple_samples
+        )
         trp_at_1 = 0
         trp_at_5 = 0
         for i, pred in enumerate(predictions):
@@ -250,10 +277,22 @@ def get_trp_predictions(agent, examples, decoding_type, random_state, show_progr
                     trp_at_1 = 1
                 break
         trp_at_1_preds.append(trp_at_1)
-        if do_sample:
+        if multiple_samples:
             trp_at_5_preds.append(trp_at_5)
         
     return trp_at_1_preds, trp_at_5_preds
+
+def get_response_predictions(agent, examples, decoding_type, random_state, show_progress=True):
+    response_preds = []
+
+    set_generate_kwargs(agent, decoding_type)
+    turn_switch_token_id = agent.resources.tokenizer(" S", add_special_tokens=False).input_ids[0]
+    for example in tqdm(examples, desc="Computing Response Predictions", disable=not show_progress):
+        prediction = next(generate_for_predictions(agent, example, random_state, eos_token_id=turn_switch_token_id, max_new_tokens=60))
+        prediction = prediction.rstrip("S").strip()
+        response_preds.append(prediction)
+
+    return response_preds
 
 def setup_worker_pool(args):
     n_gpus = torch.cuda.device_count()
@@ -296,6 +335,10 @@ def eval_trp_preds_with_worker(batch):
 def eval_pause_preds_with_worker(batch):
     eval_decoding_type = worker_decoding_type.value.decode("utf-8")
     return get_pause_predictions(worker_agent, batch, eval_decoding_type, worker_args.random_state, show_progress=False)
+
+def eval_response_preds_with_worker(batch):
+    eval_decoding_type = worker_decoding_type.value.decode("utf-8")
+    return get_response_predictions(worker_agent, batch, eval_decoding_type, worker_args.random_state, show_progress=False)
 
 def eval_ppl(worker_pool, examples, batch_size, batch_loss_eval_fn):
     losses = []
@@ -346,6 +389,21 @@ def eval_prediction(worker_pool, examples, targets, batch_pred_eval_fn):
 
     return prec_at_1, recall_at_1, f1_at_1, error_at_1, prec_at_5, recall_at_5, f1_at_5, error_at_5
 
+def eval_responses(worker_pool, examples):
+    responses = []
+    batches = [[example] for example in examples]
+    with tqdm(total=len(batches), desc="Computing Response Predictions") as pbar:
+        for res in worker_pool.imap_unordered(eval_response_preds_with_worker, batches):
+            responses.extend(res)
+            pbar.update()
+
+    # we don't consider pauses in diversity calculation
+    responses = [re.sub(pauses_in_transcript_regex, "", response) for response in responses]
+    responses = [re.sub(" {2,}", " ", response) for response in responses]
+    responses = [response for response in responses if response != ""]
+    _, _, _, pred_div = measure_repetition_and_diversity(responses)
+    return pred_div
+
 def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn, batch_loss_eval_fn):
     if args.eval_type == "all" or args.eval_type == eval_type:
         print("-------------------------------------------------")
@@ -359,10 +417,27 @@ def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn,
         print(f"Negative {eval_type}: {negative_ppl}")
         print()
 
+def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data):
+    if args.eval_type == "all" or args.eval_type == "response_pred":
+        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else [
+            "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"
+        ]
+        for eval_decoding_type in eval_decoding_types:
+            decoding_type.value = eval_decoding_type.encode("utf-8")
+            print("-------------------------------------------------")
+            print("-- Evaluating response_pred...")
+            print(f"-- (decoding: {eval_decoding_type})")
+            print("-------------------------------------------------")
+            print()
+            examples = get_response_examples(test_data)
+            diversity = eval_responses(worker_pool, examples)
+            print(f"Diversity: {diversity}")
+            print()
+
 def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, get_examples_fn, batch_pred_eval_fn):
     if args.eval_type == "all" or args.eval_type == eval_type:
         eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else [
-            "greedy", "nucleus", "contrastive", "dynamic_contrastive", "dynamic_contrastive_sampling"
+            "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"
         ]
         for eval_decoding_type in eval_decoding_types:
             decoding_type.value = eval_decoding_type.encode("utf-8")
@@ -396,9 +471,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--num-examples", type=int, default=-1)
     parser.add_argument("--data-random-state", type=int, default=42)
-    parser.add_argument("--eval-type", choices=["all", "trp_ppl", "trp_pred", "pause_ppl", "pause_pred"], default="all")
+    parser.add_argument("--eval-type", choices=["all", "trp_ppl", "trp_pred", "pause_ppl", "pause_pred", "response_pred"], default="all")
     parser.add_argument("--decoding-type", choices=[
-        "all", "greedy", "nucleus", "contrastive", "dynamic_contrastive", "dynamic_contrastive_sampling"], default="all")
+        "all", "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"], default="all")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")
@@ -427,3 +502,6 @@ if __name__ == "__main__":
         # Pausing Evals
         eval_and_print_ppl(worker_pool, args, "pause_ppl", test_data, get_pause_examples, eval_pause_losses_with_worker)
         eval_and_print_pred(worker_pool, decoding_type, args, "pause_pred", test_data, get_pause_examples, eval_pause_preds_with_worker)
+
+        # Response Evals
+        eval_and_print_response_pred(worker_pool, decoding_type, args, test_data)
