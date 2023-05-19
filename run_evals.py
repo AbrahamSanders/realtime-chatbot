@@ -4,6 +4,7 @@ import torch
 import multiprocessing as mp
 import random
 import ctypes
+from datetime import datetime
 from torch.nn import CrossEntropyLoss
 from sklearn.metrics import precision_score, recall_score, f1_score
 from transformers.trainer_utils import set_seed
@@ -496,6 +497,10 @@ if __name__ == "__main__":
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print()
 
+    start_time = datetime.now()
+    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
+
     test_data = load_test_data(args.test_data)
     if args.num_examples > 0:
         random.seed(args.data_random_state)
@@ -513,3 +518,10 @@ if __name__ == "__main__":
 
         # Response Evals
         eval_and_print_response_pred(worker_pool, decoding_type, args, test_data)
+
+    end_time = datetime.now()
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
+
+    runtime_minutes = int((end_time - start_time).total_seconds() / 60)
+    print(f"Total time: {runtime_minutes} minutes.")
