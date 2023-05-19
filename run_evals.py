@@ -411,6 +411,9 @@ def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn,
         print("-------------------------------------------------")
         print()
         positive_examples, negative_examples = get_examples_fn(test_data, "ppl", args)
+        print(f"# Positive {eval_type} examples: {len(positive_examples)}")
+        print(f"# Negative {eval_type} examples: {len(negative_examples)}")
+        print()
         positive_ppl = eval_ppl(worker_pool, positive_examples, args.batch_size, batch_loss_eval_fn)
         negative_ppl = eval_ppl(worker_pool, negative_examples, args.batch_size, batch_loss_eval_fn)
         print(f"Positive {eval_type}: {positive_ppl}")
@@ -430,6 +433,8 @@ def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data):
             print("-------------------------------------------------")
             print()
             examples = get_response_examples(test_data)
+            print(f"# response_pred examples: {len(examples)}")
+            print()
             diversity = eval_responses(worker_pool, examples)
             print(f"Diversity: {diversity}")
             print()
@@ -447,6 +452,9 @@ def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, 
             print("-------------------------------------------------")
             print()
             positive_examples, negative_examples = get_examples_fn(test_data, "pred", args)
+            print(f"# Positive {eval_type} examples: {len(positive_examples)}")
+            print(f"# Negative {eval_type} examples: {len(negative_examples)}")
+            print()
             examples = positive_examples + negative_examples
             targets = [1] * len(positive_examples) + [0] * len(negative_examples)
             prec_at_1, recall_at_1, f1_at_1, error_at_1, prec_at_5, recall_at_5, f1_at_5, error_at_5 = eval_prediction(
@@ -467,7 +475,7 @@ def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, 
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
-    parser.add_argument("--test-data", default="data/dataset_test.txt")
+    parser.add_argument("--test-data", default="data/dataset_test_dyads_original_pauses.txt")
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--num-examples", type=int, default=-1)
     parser.add_argument("--data-random-state", type=int, default=42)
