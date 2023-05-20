@@ -1,3 +1,5 @@
+import re
+
 def measure_common_responses(response_list):
     # measure the frequency of responses that contain common response phrases
     # e.g., "I don't know", "I'm not sure", etc.
@@ -9,20 +11,22 @@ def measure_common_responses(response_list):
         "i'm not sure",
         "i'm sorry"
     ]
-    common_responses_expanded = []
-    for response in common_responses:
-        if "don't" in response:
-            common_responses_expanded.append(response.replace("don't", "do not"))
-        if "can't" in response:
-            common_responses_expanded.append(response.replace("can't", "cannot"))
-            common_responses_expanded.append(response.replace("can't", "can not"))
-        if "i'm" in response:
-            common_responses_expanded.append(response.replace("i'm", "i am"))
-    common_responses = common_responses + common_responses_expanded
 
     num_responses_with_common_responses = 0
     for response in response_list:
+        # normalize response
         response = response.lower()
+        response = response.replace("really", "")
+        response = response.replace("very", "")
+        response = response.replace("so", "")
+        response = response.replace("do not", "don't")
+        response = response.replace("cannot", "can't")
+        response = response.replace("can not", "can't")
+        response = response.replace("i am", "i'm")
+        response = re.sub(" {2,}", " ", response)
+        response = response.strip()
+
+        # check if response contains common response
         for common_response in common_responses:
             if common_response in response:
                 num_responses_with_common_responses += 1
