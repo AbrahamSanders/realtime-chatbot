@@ -4,6 +4,7 @@ import torch
 import multiprocessing as mp
 import random
 import ctypes
+import pandas as pd
 from datetime import datetime
 from torch.nn import CrossEntropyLoss
 from sklearn.metrics import precision_score, recall_score, f1_score
@@ -12,11 +13,14 @@ from transformers.trainer_utils import set_seed
 from realtime_chatbot.utils import args_helpers
 from realtime_chatbot.realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
 from realtime_chatbot.dynamic_contrastive import get_contrastive_search_override
+from realtime_chatbot.utils.eval_utils import measure_common_responses
 from simctg_evaluation import measure_repetition_and_diversity
 
 speakers_in_prefix_regex = re.compile(r"S\d+(?= \(name:)")
 speakers_in_transcript_regex = re.compile(r"S\d+(?=:)")
 pauses_in_transcript_regex = re.compile(r"(?:<p> )?\((\d*?\.\d*?)\)")
+
+SUPPORTED_DECODING_TYPES = ["greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"]
 
 def get_agent(args, device=None):
     agent = RealtimeAgent(
@@ -403,9 +407,18 @@ def eval_responses(worker_pool, examples):
     responses = [re.sub(" {2,}", " ", response) for response in responses]
     responses = [response for response in responses if response != ""]
     _, _, _, pred_div = measure_repetition_and_diversity(responses)
-    return pred_div
+    pred_common = measure_common_responses(responses)
+    return pred_div, pred_common
 
-def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn, batch_loss_eval_fn):
+def print_and_append_to_results_dict(results_dict, eval_type, metric, result, do_print=True):
+    key = f"{eval_type}_{metric}"
+    if key not in results_dict:
+        results_dict[key] = []
+    results_dict[key].append(result)
+    if do_print:
+        print(f"{metric}: {result}")
+
+def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn, batch_loss_eval_fn, results_dict):
     if args.eval_type == "all" or args.eval_type == eval_type:
         print("-------------------------------------------------")
         print(f"-- Evaluating {eval_type}...")
@@ -417,15 +430,13 @@ def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn,
         print()
         positive_ppl = eval_ppl(worker_pool, positive_examples, args.batch_size, batch_loss_eval_fn)
         negative_ppl = eval_ppl(worker_pool, negative_examples, args.batch_size, batch_loss_eval_fn)
-        print(f"Positive {eval_type}: {positive_ppl}")
-        print(f"Negative {eval_type}: {negative_ppl}")
+        print_and_append_to_results_dict(results_dict, eval_type, "pos", positive_ppl)
+        print_and_append_to_results_dict(results_dict, eval_type, "neg", negative_ppl)
         print()
 
-def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data):
+def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data, results_dict):
     if args.eval_type == "all" or args.eval_type == "response_pred":
-        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else [
-            "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"
-        ]
+        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
         for eval_decoding_type in eval_decoding_types:
             decoding_type.value = eval_decoding_type.encode("utf-8")
             print("-------------------------------------------------")
@@ -436,15 +447,19 @@ def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data):
             examples = get_response_examples(test_data)
             print(f"# response_pred examples: {len(examples)}")
             print()
-            diversity = eval_responses(worker_pool, examples)
-            print(f"Diversity: {diversity}")
+            diversity, common = eval_responses(worker_pool, examples)
+            print_and_append_to_results_dict(results_dict, "response_pred", "diversity", diversity)
+            print_and_append_to_results_dict(results_dict, "response_pred", "common", common)
             print()
+            
+            # Add dummy @5 entry for sampling decodings
+            if eval_decoding_type == "nucleus" or "sampling" in eval_decoding_type:
+                print_and_append_to_results_dict(results_dict, "response_pred", "diversity", None, do_print=False)
+                print_and_append_to_results_dict(results_dict, "response_pred", "common", None, do_print=False)
 
-def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, get_examples_fn, batch_pred_eval_fn):
+def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, get_examples_fn, batch_pred_eval_fn, results_dict):
     if args.eval_type == "all" or args.eval_type == eval_type:
-        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else [
-            "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"
-        ]
+        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
         for eval_decoding_type in eval_decoding_types:
             decoding_type.value = eval_decoding_type.encode("utf-8")
             print("-------------------------------------------------")
@@ -461,18 +476,32 @@ def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, 
             prec_at_1, recall_at_1, f1_at_1, error_at_1, prec_at_5, recall_at_5, f1_at_5, error_at_5 = eval_prediction(
                 worker_pool, examples, targets, batch_pred_eval_fn
             )
-            print(f"Precision@1: {prec_at_1}")
-            print(f"Recall@1: {recall_at_1}")
-            print(f"F1@1: {f1_at_1}")
+            print("Results @1:")
+            print_and_append_to_results_dict(results_dict, eval_type, "prec", prec_at_1)
+            print_and_append_to_results_dict(results_dict, eval_type, "rec", recall_at_1)
+            print_and_append_to_results_dict(results_dict, eval_type, "f1", f1_at_1)
             if error_at_1 is not None:
-                print(f"Error@1: {error_at_1}")
+                print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_1)
             print()
             if prec_at_5 is not None:
-                print(f"Precision@5: {prec_at_5}")
-                print(f"Recall@5: {recall_at_5}")
-                print(f"F1@5: {f1_at_5}")
+                print("Results @5:")
+                print_and_append_to_results_dict(results_dict, eval_type, "prec", prec_at_5)
+                print_and_append_to_results_dict(results_dict, eval_type, "rec", recall_at_5)
+                print_and_append_to_results_dict(results_dict, eval_type, "f1", f1_at_5)
                 if error_at_5 is not None:
-                    print(f"Error@5: {error_at_5}")
+                    print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_5)
+                print()
+
+def get_pred_results_df_index(args):
+    eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
+    index = []
+    for eval_decoding_type in eval_decoding_types:
+        if eval_decoding_type == "nucleus" or "sampling" in eval_decoding_type:
+            index.append(f"{eval_decoding_type} @ 1")
+            index.append(f"{eval_decoding_type} @ 5")
+        else:
+            index.append(eval_decoding_type)
+    return index
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
@@ -481,8 +510,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-examples", type=int, default=-1)
     parser.add_argument("--data-random-state", type=int, default=42)
     parser.add_argument("--eval-type", choices=["all", "trp_ppl", "trp_pred", "pause_ppl", "pause_pred", "response_pred"], default="all")
-    parser.add_argument("--decoding-type", choices=[
-        "all", "greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"], default="all")
+    parser.add_argument("--decoding-type", choices=["all"] + SUPPORTED_DECODING_TYPES, default="all")
     args = parser.parse_args()
 
     print("\nRunning with arguments:")
@@ -506,18 +534,20 @@ if __name__ == "__main__":
         random.seed(args.data_random_state)
         test_data = random.sample(test_data, args.num_examples)
 
+    ppl_results_dict = {}
+    pred_results_dict = {}
     worker_pool, decoding_type = setup_worker_pool(args)
     with worker_pool:
         # Turn-taking Evals
-        eval_and_print_ppl(worker_pool, args, "trp_ppl", test_data, get_trp_examples, eval_trp_losses_with_worker)
-        eval_and_print_pred(worker_pool, decoding_type, args, "trp_pred", test_data, get_trp_examples, eval_trp_preds_with_worker)
+        eval_and_print_ppl(worker_pool, args, "trp_ppl", test_data, get_trp_examples, eval_trp_losses_with_worker, ppl_results_dict)
+        eval_and_print_pred(worker_pool, decoding_type, args, "trp_pred", test_data, get_trp_examples, eval_trp_preds_with_worker, pred_results_dict)
 
         # Pausing Evals
-        eval_and_print_ppl(worker_pool, args, "pause_ppl", test_data, get_pause_examples, eval_pause_losses_with_worker)
-        eval_and_print_pred(worker_pool, decoding_type, args, "pause_pred", test_data, get_pause_examples, eval_pause_preds_with_worker)
+        eval_and_print_ppl(worker_pool, args, "pause_ppl", test_data, get_pause_examples, eval_pause_losses_with_worker, ppl_results_dict)
+        eval_and_print_pred(worker_pool, decoding_type, args, "pause_pred", test_data, get_pause_examples, eval_pause_preds_with_worker, pred_results_dict)
 
         # Response Evals
-        eval_and_print_response_pred(worker_pool, decoding_type, args, test_data)
+        eval_and_print_response_pred(worker_pool, decoding_type, args, test_data, pred_results_dict)
 
     end_time = datetime.now()
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -525,3 +555,12 @@ if __name__ == "__main__":
 
     runtime_minutes = int((end_time - start_time).total_seconds() / 60)
     print(f"Total time: {runtime_minutes} minutes.")
+
+    ppl_results_df = pd.DataFrame.from_dict(ppl_results_dict)
+    print(ppl_results_df)
+    ppl_results_df.to_csv("evals_output_ppl.csv", index=False)
+
+    pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
+    pred_results_df.index = get_pred_results_df_index(args)
+    print(pred_results_df)
+    pred_results_df.to_csv("evals_output_pred.csv")
