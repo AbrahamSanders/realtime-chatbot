@@ -559,10 +559,10 @@ if __name__ == "__main__":
     if ppl_results_dict:
         ppl_results_df = pd.DataFrame.from_dict(ppl_results_dict)
         print(ppl_results_df)
-        ppl_results_df.to_csv("evals_output_ppl.csv", index=False)
+        ppl_results_df.to_csv(f"evals_output_ppl_{args.eval_type}.csv", index=False)
 
     if pred_results_dict:
         pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
         pred_results_df.index = get_pred_results_df_index(args)
         print(pred_results_df)
-        pred_results_df.to_csv("evals_output_pred.csv")
+        pred_results_df.to_csv(f"evals_output_pred_{args.eval_type}_{args.decoding_type}.csv")
