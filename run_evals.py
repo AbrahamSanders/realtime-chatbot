@@ -32,6 +32,7 @@ def get_agent(args, device=None):
             prevent_special_token_generation=args.prevent_special_token_generation,
             add_special_pause_token=args.add_special_pause_token)
     )
+    agent.resources.model.contrastive_search_original = agent.resources.model.contrastive_search
     return agent
 
 def set_generate_kwargs(agent, decoding_type):
@@ -45,6 +46,8 @@ def set_generate_kwargs(agent, decoding_type):
     if "contrastive" in decoding_type:
         agent.generate_kwargs["penalty_alpha"] = 0.6
         agent.generate_kwargs["top_k"] = 8
+    if decoding_type == "contrastive":
+        agent.resources.model.contrastive_search = agent.resources.model.contrastive_search_original
     if decoding_type == "dynamic_contrastive":
         agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.0, 1.0)
     # do_sample is not actually recognized by Generate for contrastive search. Setting it here to signal
@@ -480,16 +483,14 @@ def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, 
             print_and_append_to_results_dict(results_dict, eval_type, "prec", prec_at_1)
             print_and_append_to_results_dict(results_dict, eval_type, "rec", recall_at_1)
             print_and_append_to_results_dict(results_dict, eval_type, "f1", f1_at_1)
-            if error_at_1 is not None:
-                print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_1)
+            print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_1)
             print()
             if prec_at_5 is not None:
                 print("Results @5:")
                 print_and_append_to_results_dict(results_dict, eval_type, "prec", prec_at_5)
                 print_and_append_to_results_dict(results_dict, eval_type, "rec", recall_at_5)
                 print_and_append_to_results_dict(results_dict, eval_type, "f1", f1_at_5)
-                if error_at_5 is not None:
-                    print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_5)
+                print_and_append_to_results_dict(results_dict, eval_type, "error", error_at_5)
                 print()
 
 def get_pred_results_df_index(args):
