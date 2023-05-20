@@ -556,11 +556,13 @@ if __name__ == "__main__":
     runtime_minutes = int((end_time - start_time).total_seconds() / 60)
     print(f"Total time: {runtime_minutes} minutes.")
 
-    ppl_results_df = pd.DataFrame.from_dict(ppl_results_dict)
-    print(ppl_results_df)
-    ppl_results_df.to_csv("evals_output_ppl.csv", index=False)
+    if ppl_results_dict:
+        ppl_results_df = pd.DataFrame.from_dict(ppl_results_dict)
+        print(ppl_results_df)
+        ppl_results_df.to_csv("evals_output_ppl.csv", index=False)
 
-    pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
-    pred_results_df.index = get_pred_results_df_index(args)
-    print(pred_results_df)
-    pred_results_df.to_csv("evals_output_pred.csv")
+    if pred_results_dict:
+        pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
+        pred_results_df.index = get_pred_results_df_index(args)
+        print(pred_results_df)
+        pred_results_df.to_csv("evals_output_pred.csv")
