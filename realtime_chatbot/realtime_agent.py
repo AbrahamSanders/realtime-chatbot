@@ -3,7 +3,6 @@ from transformers.trainer_utils import set_seed
 from transformers.generation import StoppingCriteriaList
 import torch
 import re
-import uuid
 import math
 from time import sleep
 from datetime import datetime
@@ -379,6 +378,7 @@ class RealtimeAgent:
 
     def execute(self, next_input=None):
         output = None
+        output_for_cache = None
         sequence_changed = False
 
         # Check for new input:
@@ -401,36 +401,32 @@ class RealtimeAgent:
         # Otherwise, set the last cycle time to now and proceed.
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
         if seconds_since_last_cycle < max(self.config.interval, self.agent_pause_duration):
-            return output, sequence_changed
+            return output, output_for_cache, sequence_changed
         self.last_cycle_time = datetime.now()
 
         # Predict continuation
         self.agent_pause_duration = 0.0
         self._trim_sequence()
 
-        prediction = ""
+        release_prediction = True
         num_cached_chunks_released = 0
         if self.config.predictive_lookahead and self.current_speaker != self.config.agent_identity:
             self.last_prediction, is_turn_switch, similarity_with_last_pred = self._predict_completion(self.last_prediction)
             is_predicted_agent_response = self.last_prediction.response_speaker == self.config.agent_identity
+            release_prediction = False
             if similarity_with_last_pred < self.config.similarity_threshold:
                 self._cache_response(self.last_prediction.response)
                 # only release the predicted response for downstream caching if it is an agent response
                 if is_predicted_agent_response:
                     # ~ indicates a response candidate to be chunked, pre-cached, and released later 
                     # by downstream processors (e.g., TTS handler)
-                    output = f"~[{len(self.response_cache)}]{self.last_prediction.response}"
+                    output_for_cache = f"~[{len(self.response_cache)}]{self.last_prediction.response}"
             if is_turn_switch and is_predicted_agent_response:
                 self._set_current_speaker(self.config.agent_identity)
-                if output is None:
-                    #TODO: refactor to combine logic with lower block
-                    while not prediction or re.search(self.incomplete_pause_regex, prediction):
-                        cached_chunk = self._release_cached_response_chunk()
-                        if cached_chunk is None:
-                            break
-                        num_cached_chunks_released += 1
-                        prediction += cached_chunk
-        else:
+                release_prediction = True
+        
+        prediction = ""
+        if release_prediction:
             while not prediction or re.search(self.incomplete_pause_regex, prediction):
                 cached_chunk = self._release_cached_response_chunk()
                 if cached_chunk is not None:
@@ -462,7 +458,7 @@ class RealtimeAgent:
             if agent_continuation:
                 output = agent_continuation[0]
 
-        if output and not output.startswith("~"):
+        if output:
             # suppress anything that comes after a turn switch prediction (including an incomplete one at the end).
             # turn switch predictions must be the first thing in the prediction in order to be processed.
             identity_match = re.search(self.any_identity_with_incomplete_regex, output)
@@ -488,8 +484,7 @@ class RealtimeAgent:
                 # that should be released from cache instead of rendered from scratch
                 output = f"*[{num_cached_chunks_released}]{output}"
 
-        #print (f"Agent loop done: {str(uuid.uuid4())[:8]}")
-        return output, sequence_changed
+        return output, output_for_cache, sequence_changed
 
 class RealtimeAgentMultiprocessing:
     def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2",
@@ -538,7 +533,11 @@ class RealtimeAgentMultiprocessing:
                     agent.reset()
 
                 next_input = queue_helpers.join_queue(self.input_queue)
-                output, sequence_changed = agent.execute(next_input)
+                output, output_for_cache, sequence_changed = agent.execute(next_input)
+                
+                if output_for_cache and self.chain_to_input_queue is not None:
+                    self.chain_to_input_queue.put(output_for_cache)
+                
                 if output:
                     self.output_queue.put(output)
                     if self.chain_to_input_queue is not None:

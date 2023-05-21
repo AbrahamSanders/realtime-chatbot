@@ -81,7 +81,7 @@ def main():
 
         # Agent output (if any)
         next_output = agent.next_output()
-        if next_output and not next_output.startswith("~"):
+        if next_output:
             cache_release_prefix_match = re.match(cache_release_regex, next_output)
             next_output = next_output[cache_release_prefix_match.end():] if cache_release_prefix_match \
                 else next_output.lstrip("*")
