@@ -113,7 +113,8 @@ class RealtimeAgent:
         
         self.reset()
 
-    def _generate(self, sequence, stopping_criteria=None, take_tokens=None, return_generate_output=False, **generate_kwargs_overrides):
+    def _generate(self, sequence, stopping_criteria=None, take_tokens=None, return_generate_output=False, 
+                  always_return_list=False, **generate_kwargs_overrides):
         # Configure generation params
         generate_kwargs = self.generate_kwargs.copy()
         if generate_kwargs_overrides:
@@ -122,14 +123,21 @@ class RealtimeAgent:
             generate_kwargs["stopping_criteria"] = stopping_criteria
             stopping_criteria = None
 
-        if isinstance(sequence, str):
-            # Tokenize sequence
+        input_is_list = isinstance(sequence, list)
+        if input_is_list:
+            always_return_list = True
+            
+        if input_is_list or isinstance(sequence, str):
+            # Tokenize sequence with left padding
+            original_padding_side = self.resources.tokenizer.padding_side
+            self.resources.tokenizer.padding_side = "left"
             inputs = self.resources.tokenizer(
-                sequence, truncation=True, max_length=self.tokenizer_max_length, return_tensors="pt"
+                sequence, padding=True, truncation=True, max_length=self.tokenizer_max_length, return_tensors="pt"
             ).to(self.resources.device)
+            self.resources.tokenizer.padding_side = original_padding_side
         else:
             inputs = {"input_ids": sequence.to(self.resources.device)}
-        
+
         generate_kwargs.update(inputs)
 
         # Generate
@@ -156,7 +164,7 @@ class RealtimeAgent:
 
             results.append(generated_text)
 
-        gen_results = results if len(results) > 1 else results[0]
+        gen_results = results if always_return_list or len(results) > 1 else results[0]
         if return_generate_output:
             gen_results = (gen_results, outputs)
         return gen_results

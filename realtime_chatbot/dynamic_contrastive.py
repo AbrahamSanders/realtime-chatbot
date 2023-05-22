@@ -61,7 +61,9 @@ def _ranking_fast(
     context_hidden: torch.FloatTensor,
     next_hidden: torch.FloatTensor,
     next_top_k_probs: torch.FloatTensor,
-    alpha: float,
+    # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
+    alpha: torch.FloatTensor,
+    # >>>>>>>>>>>> END: CUSTOM LOGIC <<<<<<<<<<<<
     beam_width: int,
     # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
     penalty_mask: torch.FloatTensor,
@@ -85,6 +87,7 @@ def _ranking_fast(
     next_top_k_probs = next_top_k_probs.view(-1)  # [B*K]
     
     # >>>>>>>>>>>> START: CUSTOM LOGIC <<<<<<<<<<<<
+    alpha = alpha.repeat_interleave(beam_width, dim=0).squeeze(-1)
     contrastive_score = (1.0 - alpha) * next_top_k_probs - alpha * degeneration_penalty * penalty_mask.view(-1)
     # >>>>>>>>>>>> START: END LOGIC <<<<<<<<<<<<
     
@@ -326,11 +329,12 @@ def get_contrastive_search_override(self, min_penalty_alpha, max_penalty_alpha, 
 
             if min_penalty_alpha != max_penalty_alpha:
                 #next_entropy = entr(next_probs).sum(dim=-1)
-                next_expected_prob = (next_probs ** 2).sum(dim=-1)
+                next_expected_prob = (next_probs ** 2).sum(dim=-1, keepdim=True)
                 # See: https://www.desmos.com/calculator/bcavepe4bw
-                penalty_alpha = min_penalty_alpha + (max_penalty_alpha-min_penalty_alpha) * (1-next_expected_prob.item())# ** 2
+                penalty_alpha = min_penalty_alpha + (max_penalty_alpha-min_penalty_alpha) * (1-next_expected_prob)# ** 2
             else:
-                penalty_alpha = min_penalty_alpha
+                penalty_alpha = min_penalty_alpha * torch.ones(
+                    batch_size, dtype=next_probs.dtype, device=next_probs.device).unsqueeze(-1)
 
             #print(f"Penalty-alpha: {penalty_alpha:.2f}")
 
