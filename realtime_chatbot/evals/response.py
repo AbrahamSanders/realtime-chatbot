@@ -5,7 +5,7 @@ from . import common as cm
 from .turn_taking import speakers_in_transcript_regex
 from .pausing import pauses_in_transcript_regex
 from .metrics_simctg import measure_repetition_and_diversity
-from .metrics import measure_common_responses
+from .metrics import measure_generic_responses
 
 def get_response_examples(test_data):
     response_examples = []
@@ -43,9 +43,9 @@ def eval_response_pred(worker_pool, args, test_data, batch_size):
     predictions = [response for response in predictions if response != ""]
 
     _, _, _, diversity = measure_repetition_and_diversity(predictions)
-    common = measure_common_responses(predictions)
+    generic = measure_generic_responses(predictions)
 
     return [
         ("diversity", diversity),
-        ("common", common)
+        ("generic", generic)
     ]
