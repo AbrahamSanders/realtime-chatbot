@@ -123,7 +123,7 @@ class RealtimeAgent:
             generate_kwargs["stopping_criteria"] = stopping_criteria
             stopping_criteria = None
 
-        input_is_list = isinstance(sequence, list)
+        input_is_list = isinstance(sequence, (list, tuple))
         if input_is_list:
             always_return_list = True
             

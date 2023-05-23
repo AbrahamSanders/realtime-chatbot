@@ -36,7 +36,7 @@ def get_agent(args, device=None):
     return agent
 
 def get_batch_size(args, decoding_type):
-    if "contrastive" in decoding_type:
+    if decoding_type is not None and "contrastive" in decoding_type:
         return args.contrastive_batch_size
     else:
         return args.batch_size
@@ -65,7 +65,7 @@ def load_test_data(filename):
     with open(filename, "r", encoding="utf-8") as f:
         return f.readlines()
 
-def get_trp_examples(test_data, eval_mode, args):
+def get_trp_examples(test_data, eval_mode):
     if eval_mode not in ["ppl", "pred"]:
         raise ValueError(f"eval_mode must be 'ppl' or 'pred'. Got {eval_mode}.")
 
@@ -177,8 +177,9 @@ def get_response_examples(test_data):
     response_examples.sort(key=len, reverse=True)
     return response_examples
 
-def get_losses(agent, examples, batch_size, from_last_idx_of_token_id, show_progress=True):
+def get_losses(agent, examples, batch_size, from_last_idx_of_token, show_progress=True):
     losses = []
+    from_last_idx_of_token_id = agent.resources.tokenizer(from_last_idx_of_token, add_special_tokens=False).input_ids[0]
     for start_index in trange(0, len(examples), batch_size, desc="Computing Losses", disable=not show_progress):
         examples_batch = examples[start_index : start_index+batch_size]
         inputs = agent.resources.tokenizer(
@@ -202,63 +203,18 @@ def get_losses(agent, examples, batch_size, from_last_idx_of_token_id, show_prog
 
     return losses
 
-def get_trp_predictions(agent, examples, batch_size, decoding_type, show_progress=True):
-    trp_preds = []
-
+def get_predictions(agent, examples, batch_size, eos_token, strip_eos_token, max_new_tokens, decoding_type, show_progress=True):
+    predictions = []
     set_generate_kwargs(agent, decoding_type)
-    colon_token_id = agent.resources.tokenizer(":", add_special_tokens=False).input_ids[0]
-    for start_index in trange(0, len(examples), batch_size, desc="Computing TRP Predictions", disable=not show_progress):
+    eos_token_id = agent.resources.tokenizer(eos_token, add_special_tokens=False).input_ids[0]
+    for start_index in trange(0, len(examples), batch_size, desc="Computing Predictions", disable=not show_progress):
         examples_batch = examples[start_index : start_index+batch_size]
-        predictions = agent._generate(examples_batch, eos_token_id=colon_token_id, max_new_tokens=4)
+        batch_preds = agent._generate(examples_batch, eos_token_id=eos_token_id, max_new_tokens=max_new_tokens)
+        if strip_eos_token:
+            batch_preds = [pred.rstrip(eos_token) for pred in batch_preds]
+        predictions.extend(batch_preds)
 
-        for example, pred in zip(examples_batch, predictions):
-            current_speaker = re.findall(speakers_in_transcript_regex, example)[-1]
-            pred_lstrip = pred.lstrip()
-            trp = 0
-            if re.match(agent.any_identity_regex, pred_lstrip) and not pred_lstrip.startswith(f"{current_speaker}:"):
-                trp = 1
-            trp_preds.append(trp)
-
-    return (trp_preds,)
-
-def get_pause_predictions(agent, examples, batch_size, decoding_type, show_progress=True):
-    pause_preds = []
-    pause_duration_errors = []
-
-    set_generate_kwargs(agent, decoding_type)
-    end_parens_token_id = agent.resources.tokenizer(")", add_special_tokens=False).input_ids[0]
-    for start_index in trange(0, len(examples), batch_size, desc="Computing Pause Predictions", disable=not show_progress):
-        examples_batch = examples[start_index : start_index+batch_size]
-        examples_batch, target_durations_batch = zip(*examples_batch)
-        predictions = agent._generate(examples_batch, eos_token_id=end_parens_token_id, max_new_tokens=7)
-        
-        for pred, target_duration in zip(predictions, target_durations_batch):
-            pause_match = re.match(agent.pause_regex, pred.lstrip())
-            pause = 0
-            pause_duration_error = None
-            if pause_match:
-                pause = 1
-                if target_duration is not None:
-                    pause_duration = float(pause_match[1])
-                    pause_duration_error = abs(pause_duration - target_duration)
-            pause_preds.append(pause)
-            if pause_duration_error is not None:
-                pause_duration_errors.append(pause_duration_error)
-    
-    return pause_preds, pause_duration_errors
-
-def get_response_predictions(agent, examples, batch_size, decoding_type, show_progress=True):
-    response_preds = []
-    
-    set_generate_kwargs(agent, decoding_type)
-    turn_switch_token_id = agent.resources.tokenizer(" S", add_special_tokens=False).input_ids[0]
-    for start_index in trange(0, len(examples), batch_size, desc="Computing Response Predictions", disable=not show_progress):
-        examples_batch = examples[start_index : start_index+batch_size]
-        predictions = agent._generate(examples_batch, eos_token_id=turn_switch_token_id, max_new_tokens=60)
-
-        response_preds.extend([pred.rstrip("S").strip() for pred in predictions])
-
-    return response_preds
+    return predictions
 
 def setup_worker_pool(args):
     n_gpus = torch.cuda.device_count()
@@ -269,10 +225,10 @@ def setup_worker_pool(args):
     for i in range(n_gpus):
         device_queue.put(i)
     decoding_type = ctx.Array(ctypes.c_char, 100)
-    worker_pool = ctx.Pool(max(n_gpus, 1), initializer=eval_worker_init, initargs=(device_queue, decoding_type, args))
+    worker_pool = ctx.Pool(max(n_gpus, 1), initializer=worker_init, initargs=(device_queue, decoding_type, args))
     return worker_pool, decoding_type
 
-def eval_worker_init(device_queue, decoding_type, args):
+def worker_init(device_queue, decoding_type, args):
     if not device_queue.empty():
         device_id = device_queue.get()
         device = torch.device(f"cuda:{device_id}")
@@ -285,145 +241,191 @@ def eval_worker_init(device_queue, decoding_type, args):
     global worker_args
     worker_args = args
 
-def eval_trp_losses_with_worker(batch):
-    turn_switch_token_id = worker_agent.resources.tokenizer(" S", add_special_tokens=False).input_ids[0]
-    return get_losses(worker_agent, batch, worker_args.batch_size, turn_switch_token_id, show_progress=False)
+def get_trp_losses_with_worker(batch):
+    return get_losses(worker_agent, batch, worker_args.batch_size, from_last_idx_of_token=" S", show_progress=False)
 
-def eval_pause_losses_with_worker(batch):
+def get_pause_losses_with_worker(batch):
     pause_token = "<p>" if worker_args.add_special_pause_token else " ("
-    pause_token_id = worker_agent.resources.tokenizer(pause_token, add_special_tokens=False).input_ids[0]
-    return get_losses(worker_agent, batch, worker_args.batch_size, pause_token_id, show_progress=False)
+    return get_losses(worker_agent, batch, worker_args.batch_size, from_last_idx_of_token=pause_token, show_progress=False)
 
-def eval_trp_preds_with_worker(batch):
+def get_trp_preds_with_worker(batch):
     eval_decoding_type = worker_decoding_type.value.decode("utf-8")
     batch_size = get_batch_size(worker_args, eval_decoding_type)
-    return get_trp_predictions(worker_agent, batch, batch_size, eval_decoding_type, show_progress=False)
+    return get_predictions(worker_agent, batch, batch_size, eos_token=":", strip_eos_token=False, 
+                           max_new_tokens=4, decoding_type=eval_decoding_type, show_progress=False)
 
-def eval_pause_preds_with_worker(batch):
+def get_pause_preds_with_worker(batch):
     eval_decoding_type = worker_decoding_type.value.decode("utf-8")
     batch_size = get_batch_size(worker_args, eval_decoding_type)
-    return get_pause_predictions(worker_agent, batch, batch_size, eval_decoding_type, show_progress=False)
+    return get_predictions(worker_agent, batch, batch_size, eos_token=")", strip_eos_token=False, 
+                           max_new_tokens=7, decoding_type=eval_decoding_type, show_progress=False)
 
-def eval_response_preds_with_worker(batch):
+def get_response_preds_with_worker(batch):
     eval_decoding_type = worker_decoding_type.value.decode("utf-8")
     batch_size = get_batch_size(worker_args, eval_decoding_type)
-    return get_response_predictions(worker_agent, batch, batch_size, eval_decoding_type, show_progress=False)
+    return get_predictions(worker_agent, batch, batch_size, eos_token=" S", strip_eos_token=True, 
+                           max_new_tokens=60, decoding_type=eval_decoding_type, show_progress=False)
 
-def eval_ppl(worker_pool, examples, batch_size, batch_loss_eval_fn):
-    losses = []
+def get_model_output_with_worker_pool(worker_pool, examples, batch_size, batch_get_output_fn):
+    worker_outputs = []
     batches = [examples[start:start+batch_size] for start in range(0, len(examples), batch_size)]
-    with tqdm(total=len(examples), desc="Computing TRP Losses") as pbar:
-        for res in worker_pool.imap_unordered(batch_loss_eval_fn, batches):
-            losses.extend(res)
+    with tqdm(total=len(examples), desc="Computing Model Output") as pbar:
+        for res in worker_pool.imap(batch_get_output_fn, batches):
+            worker_outputs.extend(res)
             pbar.update(len(res))
+    return worker_outputs
 
-    ppl = torch.exp(torch.tensor(losses).mean()).item()
-    return ppl
-
-def eval_prediction(worker_pool, examples, targets, batch_size, batch_pred_eval_fn):
-    preds = []
-    errors = []
-    batches = [examples[start:start+batch_size] for start in range(0, len(examples), batch_size)]
-    with tqdm(total=len(examples), desc="Computing Predictions") as pbar:
-        for res in worker_pool.imap(batch_pred_eval_fn, batches):
-            if len(res) == 1:
-                preds.extend(res[0])
-            else:
-                preds.extend(res[0])
-                errors.extend(res[1])
-            pbar.update(len(res[0]))
-
-    prec = precision_score(targets, preds)
-    recall = recall_score(targets, preds)
-    f1 = f1_score(targets, preds)
-    error = None
-    if len(errors) > 0:
-        error = sum(errors) / len(errors)
-
-    return prec, recall, f1, error
-
-def eval_responses(worker_pool, examples, batch_size):
-    responses = []
-    batches = [examples[start:start+batch_size] for start in range(0, len(examples), batch_size)]
-    with tqdm(total=len(examples), desc="Computing Response Predictions") as pbar:
-        for res in worker_pool.imap_unordered(eval_response_preds_with_worker, batches):
-            responses.extend(res)
-            pbar.update(len(res))
-
-    # we don't consider pauses in diversity calculation
-    responses = [re.sub(pauses_in_transcript_regex, "", response) for response in responses]
-    responses = [re.sub(" {2,}", " ", response) for response in responses]
-    responses = [response for response in responses if response != ""]
-    _, _, _, pred_div = measure_repetition_and_diversity(responses)
-    pred_common = measure_common_responses(responses)
-    return pred_div, pred_common
-
-def print_and_append_to_results_dict(results_dict, eval_type, metric, result, do_print=True):
+def print_and_append_to_results_dict(results_dict, eval_type, metric, result):
     key = f"{eval_type}_{metric}"
     if key not in results_dict:
         results_dict[key] = []
     results_dict[key].append(result)
-    if do_print:
-        print(f"{metric}: {result}")
+    print(f"{metric}: {result}")
 
-def eval_and_print_ppl(worker_pool, args, eval_type, test_data, get_examples_fn, batch_loss_eval_fn, results_dict):
+def eval_and_print(eval_type, eval_fn, decoding_type, worker_pool, args, test_data, results_dict):
     if args.eval_type == "all" or args.eval_type == eval_type:
-        print("-------------------------------------------------")
-        print(f"-- Evaluating {eval_type}...")
-        print("-------------------------------------------------")
-        print()
-        positive_examples, negative_examples = get_examples_fn(test_data, "ppl", args)
-        print(f"# Positive {eval_type} examples: {len(positive_examples)}")
-        print(f"# Negative {eval_type} examples: {len(negative_examples)}")
-        print()
-        positive_ppl = eval_ppl(worker_pool, positive_examples, args.batch_size, batch_loss_eval_fn)
-        negative_ppl = eval_ppl(worker_pool, negative_examples, args.batch_size, batch_loss_eval_fn)
-        print_and_append_to_results_dict(results_dict, eval_type, "pos", positive_ppl)
-        print_and_append_to_results_dict(results_dict, eval_type, "neg", negative_ppl)
-        print()
+        if decoding_type is not None:
+            eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
+        else:
+            eval_decoding_types = [None]
 
-def eval_and_print_pred(worker_pool, decoding_type, args, eval_type, test_data, get_examples_fn, batch_pred_eval_fn, results_dict):
-    if args.eval_type == "all" or args.eval_type == eval_type:
-        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
         for eval_decoding_type in eval_decoding_types:
-            decoding_type.value = eval_decoding_type.encode("utf-8")
             print("-------------------------------------------------")
             print(f"-- Evaluating {eval_type}...")
-            print(f"-- (decoding: {eval_decoding_type})")
+            if eval_decoding_type is not None:
+                print(f"-- (decoding: {eval_decoding_type})")
+                decoding_type.value = eval_decoding_type.encode("utf-8")
             print("-------------------------------------------------")
             print()
-            positive_examples, negative_examples = get_examples_fn(test_data, "pred", args)
-            print(f"# Positive {eval_type} examples: {len(positive_examples)}")
-            print(f"# Negative {eval_type} examples: {len(negative_examples)}")
-            print()
-            examples = positive_examples + negative_examples
-            targets = [1] * len(positive_examples) + [0] * len(negative_examples)
             batch_size = get_batch_size(args, eval_decoding_type)
-            prec, recall, f1, error = eval_prediction(worker_pool, examples, targets, batch_size, batch_pred_eval_fn)
-            print_and_append_to_results_dict(results_dict, eval_type, "prec", prec)
-            print_and_append_to_results_dict(results_dict, eval_type, "rec", recall)
-            print_and_append_to_results_dict(results_dict, eval_type, "f1", f1)
-            print_and_append_to_results_dict(results_dict, eval_type, "error", error)
+            results = eval_fn(worker_pool, args, test_data, batch_size)
+            for metric, result in results:
+                print_and_append_to_results_dict(results_dict, eval_type, metric, result)
             print()
 
-def eval_and_print_response_pred(worker_pool, decoding_type, args, test_data, results_dict):
-    if args.eval_type == "all" or args.eval_type == "response_pred":
-        eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
-        for eval_decoding_type in eval_decoding_types:
-            decoding_type.value = eval_decoding_type.encode("utf-8")
-            print("-------------------------------------------------")
-            print("-- Evaluating response_pred...")
-            print(f"-- (decoding: {eval_decoding_type})")
-            print("-------------------------------------------------")
-            print()
-            examples = get_response_examples(test_data)
-            print(f"# response_pred examples: {len(examples)}")
-            print()
-            batch_size = get_batch_size(args, eval_decoding_type)
-            diversity, common = eval_responses(worker_pool, examples, batch_size)
-            print_and_append_to_results_dict(results_dict, "response_pred", "diversity", diversity)
-            print_and_append_to_results_dict(results_dict, "response_pred", "common", common)
-            print()
+def eval_trp_ppl(worker_pool, args, test_data, batch_size):
+    positive_examples, negative_examples = get_trp_examples(test_data, "ppl")
+    print(f"# Positive TRP examples: {len(positive_examples)}")
+    print(f"# Negative TRP examples: {len(negative_examples)}")
+    print()
+
+    positive_losses = get_model_output_with_worker_pool(worker_pool, positive_examples, batch_size, get_trp_losses_with_worker)
+    positive_ppl = torch.exp(torch.tensor(positive_losses).mean()).item()
+
+    negative_losses = get_model_output_with_worker_pool(worker_pool, negative_examples, batch_size, get_trp_losses_with_worker)
+    negative_ppl = torch.exp(torch.tensor(negative_losses).mean()).item()
+
+    return [
+        ("pos", positive_ppl),
+        ("neg", negative_ppl)
+    ]
+
+def eval_pause_ppl(worker_pool, args, test_data, batch_size):
+    positive_examples, negative_examples = get_pause_examples(test_data, "ppl", args)
+    print(f"# Positive Pause examples: {len(positive_examples)}")
+    print(f"# Negative Pause examples: {len(negative_examples)}")
+    print()
+
+    positive_losses = get_model_output_with_worker_pool(worker_pool, positive_examples, batch_size, get_pause_losses_with_worker)
+    positive_ppl = torch.exp(torch.tensor(positive_losses).mean()).item()
+
+    negative_losses = get_model_output_with_worker_pool(worker_pool, negative_examples, batch_size, get_pause_losses_with_worker)
+    negative_ppl = torch.exp(torch.tensor(negative_losses).mean()).item()
+
+    return [
+        ("pos", positive_ppl),
+        ("neg", negative_ppl)
+    ]
+
+def eval_trp_pred(worker_pool, args, test_data, batch_size):
+    positive_examples, negative_examples = get_trp_examples(test_data, "pred")
+    print(f"# Positive TRP examples: {len(positive_examples)}")
+    print(f"# Negative TRP examples: {len(negative_examples)}")
+    print()
+
+    examples = positive_examples + negative_examples
+    targets = [1] * len(positive_examples) + [0] * len(negative_examples)
+    predictions = get_model_output_with_worker_pool(worker_pool, examples, batch_size, get_trp_preds_with_worker)
+
+    trp_preds = []
+    for example, pred in zip(examples, predictions):
+        current_speaker = re.findall(speakers_in_transcript_regex, example)[-1]
+        pred_lstrip = pred.lstrip()
+        trp = 0
+        if re.match(speakers_in_transcript_regex, pred_lstrip) and not pred_lstrip.startswith(f"{current_speaker}:"):
+            trp = 1
+        trp_preds.append(trp)
+
+    prec = precision_score(targets, trp_preds)
+    recall = recall_score(targets, trp_preds)
+    f1 = f1_score(targets, trp_preds)
+
+    return [
+        ("prec", prec),
+        ("rec", recall),
+        ("f1", f1)
+    ]
+
+def eval_pause_pred(worker_pool, args, test_data, batch_size):
+    positive_examples, negative_examples = get_pause_examples(test_data, "pred", args)
+    print(f"# Positive Pause examples: {len(positive_examples)}")
+    print(f"# Negative Pause examples: {len(negative_examples)}")
+    print()
+
+    examples = positive_examples + negative_examples
+    examples, duration_targets = zip(*examples)
+    targets = [1] * len(positive_examples) + [0] * len(negative_examples)
+    predictions = get_model_output_with_worker_pool(worker_pool, examples, batch_size, get_pause_preds_with_worker)
+
+    pause_preds = []
+    pause_duration_errors = []
+    for pred, target_duration in zip(predictions, duration_targets):
+        pause_match = re.match(pauses_in_transcript_regex, pred.lstrip())
+        pause = 0
+        pause_duration_error = None
+        if pause_match:
+            pause = 1
+            if target_duration is not None:
+                pause_duration = float(pause_match[1])
+                pause_duration_error = abs(pause_duration - target_duration)
+        pause_preds.append(pause)
+        if pause_duration_error is not None:
+            pause_duration_errors.append(pause_duration_error)
+
+    prec = precision_score(targets, pause_preds)
+    recall = recall_score(targets, pause_preds)
+    f1 = f1_score(targets, pause_preds)
+    error = None
+    if len(pause_duration_errors) > 0:
+        error = sum(pause_duration_errors) / len(pause_duration_errors)
+
+    return [
+        ("prec", prec),
+        ("rec", recall),
+        ("f1", f1),
+        ("error", error)
+    ]
+
+def eval_response_pred(worker_pool, args, test_data, batch_size):
+    examples = get_response_examples(test_data)
+    print(f"# Response Prediction examples: {len(examples)}")
+    print()
+
+    predictions = get_model_output_with_worker_pool(worker_pool, examples, batch_size, get_response_preds_with_worker)
+
+    # we don't consider pauses in diversity calculation
+    predictions = [re.sub(pauses_in_transcript_regex, "", response) for response in predictions]
+    predictions = [re.sub(" {2,}", " ", response) for response in predictions]
+    predictions = [response.strip() for response in predictions]
+    predictions = [response for response in predictions if response != ""]
+
+    _, _, _, diversity = measure_repetition_and_diversity(predictions)
+    common = measure_common_responses(predictions)
+
+    return [
+        ("diversity", diversity),
+        ("common", common)
+    ]
 
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
@@ -458,15 +460,15 @@ if __name__ == "__main__":
     worker_pool, decoding_type = setup_worker_pool(args)
     with worker_pool:
         # Turn-taking Evals
-        eval_and_print_ppl(worker_pool, args, "trp_ppl", test_data, get_trp_examples, eval_trp_losses_with_worker, ppl_results_dict)
-        eval_and_print_pred(worker_pool, decoding_type, args, "trp_pred", test_data, get_trp_examples, eval_trp_preds_with_worker, pred_results_dict)
+        eval_and_print("trp_ppl", eval_trp_ppl, None, worker_pool, args, test_data, ppl_results_dict)
+        eval_and_print("trp_pred", eval_trp_pred, decoding_type, worker_pool, args, test_data, pred_results_dict)
 
         # Pausing Evals
-        eval_and_print_ppl(worker_pool, args, "pause_ppl", test_data, get_pause_examples, eval_pause_losses_with_worker, ppl_results_dict)
-        eval_and_print_pred(worker_pool, decoding_type, args, "pause_pred", test_data, get_pause_examples, eval_pause_preds_with_worker, pred_results_dict)
+        eval_and_print("pause_ppl", eval_pause_ppl, None, worker_pool, args, test_data, ppl_results_dict)
+        eval_and_print("pause_pred", eval_pause_pred, decoding_type, worker_pool, args, test_data, pred_results_dict)
 
         # Response Evals
-        eval_and_print_response_pred(worker_pool, decoding_type, args, test_data, pred_results_dict)
+        eval_and_print("response_pred", eval_response_pred, decoding_type, worker_pool, args, test_data, pred_results_dict)
 
     end_time = datetime.now()
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
