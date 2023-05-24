@@ -8,6 +8,14 @@ from realtime_chatbot.evals.turn_taking import eval_trp_ppl
 from realtime_chatbot.evals.pausing import eval_pause_ppl
 from realtime_chatbot.evals.response_quality import eval_response_quality
 
+def get_filename_suffix(option_list):
+    if "all" in option_list:
+        return "all"
+    elif len(option_list) == 1:
+        return option_list[0]
+    else:
+        return "multiple"
+
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
     parser.add_argument("--test-data", default="data/dataset_test.txt")
@@ -15,8 +23,8 @@ if __name__ == "__main__":
     parser.add_argument("--contrastive-batch-size", type=int, default=5)
     parser.add_argument("--num-examples", type=int, default=-1)
     parser.add_argument("--data-random-state", type=int, default=42)
-    parser.add_argument("--eval-type", choices=["all", "ppl_trp", "ppl_pause", "pred", "response"], default="all")
-    parser.add_argument("--decoding-type", choices=["all"] + cm.SUPPORTED_DECODING_TYPES, default="all")
+    parser.add_argument("--eval-type", choices=["all"] + cm.SUPPORTED_EVAL_TYPES, default=["all"], nargs="+")
+    parser.add_argument("--decoding-type", choices=["all"] + cm.SUPPORTED_DECODING_TYPES, default=["all"], nargs="+")
     args = parser.parse_args()
 
     if args.random_state is None:
@@ -26,6 +34,14 @@ if __name__ == "__main__":
     print("\nRunning with arguments:")
     print(args)
     print()
+
+    eval_type_filename_suffix = get_filename_suffix(args.eval_type)
+    if "all" in args.eval_type:
+        args.eval_type = cm.SUPPORTED_EVAL_TYPES
+
+    decoding_type_filename_suffix = get_filename_suffix(args.decoding_type)
+    if "all" in args.decoding_type:
+        args.decoding_type = cm.SUPPORTED_DECODING_TYPES
 
     start_time = datetime.now()
     print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -61,11 +77,11 @@ if __name__ == "__main__":
         ppl_results_df = pd.DataFrame.from_dict(ppl_results_dict)
         print(ppl_results_df)
         print()
-        ppl_results_df.to_csv(f"evals_output_ppl_{args.eval_type}.csv", index=False)
+        ppl_results_df.to_csv(f"evals_output_ppl_{eval_type_filename_suffix}.csv", index=False)
 
     if pred_results_dict:
         pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
-        pred_results_df.index = [args.decoding_type] if args.decoding_type != "all" else cm.SUPPORTED_DECODING_TYPES
+        pred_results_df.index = args.decoding_type
 
         # overall metric, computed from all metrics except precision (prec) and recall (rec) 
         # because they are redundant with f1 when averaged
@@ -74,4 +90,5 @@ if __name__ == "__main__":
 
         print(pred_results_df)
         print()
-        pred_results_df.to_csv(f"evals_output_pred_{args.eval_type}_{args.decoding_type}.csv")
+        suffix = f"{eval_type_filename_suffix}_{decoding_type_filename_suffix}"
+        pred_results_df.to_csv(f"evals_output_pred_{suffix}.csv")

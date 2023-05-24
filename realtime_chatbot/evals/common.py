@@ -11,6 +11,7 @@ from ..dynamic_contrastive import get_contrastive_search_override
 
 from .data_processing import get_prediction_examples, classes
 
+SUPPORTED_EVAL_TYPES = ["ppl_trp", "ppl_pause", "pred", "response"]
 SUPPORTED_DECODING_TYPES = ["greedy", "nucleus", "typical", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"]
 
 def get_agent(args, device=None):
@@ -179,12 +180,8 @@ def print_and_append_to_results_dict(results_dict, eval_type, metric, result):
     print(f"{metric}: {result}")
 
 def eval_and_print(eval_type, eval_fn, decoding_type, worker_pool, args, test_data, results_dict):
-    if args.eval_type == "all" or args.eval_type == eval_type:
-        if decoding_type is not None:
-            eval_decoding_types = [args.decoding_type] if args.decoding_type != "all" else SUPPORTED_DECODING_TYPES
-        else:
-            eval_decoding_types = [None]
-
+    if eval_type in args.eval_type:
+        eval_decoding_types = args.decoding_type if decoding_type is not None else [None]
         for eval_decoding_type in eval_decoding_types:
             print("-------------------------------------------------")
             print(f"-- Evaluating {eval_type}...")
