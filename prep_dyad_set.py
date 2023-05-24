@@ -6,7 +6,7 @@ from run_evals import speakers_in_prefix_regex
 pauses_in_transcript_regex = re.compile(r"(?:<p> )?\((\d*?\.{1,2}\d*?)\)")
 
 def main():
-    parser = argparse.ArgumentParser("Prepare the test set for evals")
+    parser = argparse.ArgumentParser("Prepare the dyad set for evals")
     parser.add_argument("--data-dir", default="data")
     
     args = parser.parse_args()

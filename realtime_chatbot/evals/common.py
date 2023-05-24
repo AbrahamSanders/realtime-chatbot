@@ -2,10 +2,14 @@ from tqdm import tqdm, trange
 import torch
 import multiprocessing as mp
 import ctypes
+import pandas as pd
 from torch.nn import CrossEntropyLoss
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-from realtime_chatbot.realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
-from realtime_chatbot.dynamic_contrastive import get_contrastive_search_override
+from ..realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
+from ..dynamic_contrastive import get_contrastive_search_override
+
+from .data_processing import get_prediction_examples, classes
 
 SUPPORTED_DECODING_TYPES = ["greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"]
 
@@ -125,6 +129,44 @@ def get_model_output_with_worker_pool(worker_pool, examples, batch_size, batch_g
             worker_outputs.extend(res)
             pbar.update(len(res))
     return worker_outputs
+
+def get_preds_with_worker(batch):
+    eval_decoding_type = worker_decoding_type.value.decode("utf-8")
+    batch_size = get_batch_size(worker_args, eval_decoding_type)
+    return get_predictions(worker_agent, batch, batch_size, eos_token=worker_agent.resources.tokenizer.eos_token,
+                           strip_eos_token=True, max_new_tokens=20, decoding_type=eval_decoding_type, show_progress=False)
+
+def eval_pred(worker_pool, args, test_data, batch_size):
+    examples, labels_df = get_prediction_examples(test_data)
+    print(f"# Examples: {len(examples)}")
+    print()
+
+    predictions = get_model_output_with_worker_pool(worker_pool, examples, batch_size, get_preds_with_worker)
+
+    pred_labels = []
+    for example, pred in zip(examples, predictions):
+        pred = pred.strip()
+        pred_labels.append(tuple([criterion(example, pred) for criterion in classes.values()]))
+    pred_labels_df = pd.DataFrame(pred_labels, columns=classes.keys())
+    pred_labels_df[pred_labels_df == -1] = 0
+
+    metrics = []
+    for class_name in classes.keys():
+        class_targets = labels_df[class_name]
+        class_preds = pred_labels_df[class_name]
+
+        include = class_targets != -1
+        class_targets = class_targets[include]
+        class_preds = class_preds[include]
+
+        prec = precision_score(class_targets, class_preds)
+        recall = recall_score(class_targets, class_preds)
+        f1 = f1_score(class_targets, class_preds)
+        metrics.append((f"{class_name}_prec", prec))
+        metrics.append((f"{class_name}_rec", recall))
+        metrics.append((f"{class_name}_f1", f1))
+
+    return metrics
 
 def print_and_append_to_results_dict(results_dict, eval_type, metric, result):
     key = f"{eval_type}_{metric}"
