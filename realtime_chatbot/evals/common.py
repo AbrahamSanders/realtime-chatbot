@@ -11,7 +11,7 @@ from ..dynamic_contrastive import get_contrastive_search_override
 
 from .data_processing import get_prediction_examples, classes
 
-SUPPORTED_DECODING_TYPES = ["greedy", "nucleus", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"]
+SUPPORTED_DECODING_TYPES = ["greedy", "nucleus", "typical", "contrastive", "dynamic_contrastive", "contrastive_sampling", "dynamic_contrastive_sampling"]
 
 def get_agent(args, device=None):
     agent = RealtimeAgent(
@@ -41,6 +41,9 @@ def set_generate_kwargs(agent, decoding_type):
     if decoding_type == "nucleus":
         agent.generate_kwargs["do_sample"] = True
         agent.generate_kwargs["top_p"] = 0.95
+    if decoding_type == "typical":
+        agent.generate_kwargs["do_sample"] = True
+        agent.generate_kwargs["typical_p"] = 0.95
     if "contrastive" in decoding_type:
         agent.generate_kwargs["penalty_alpha"] = 0.6
         agent.generate_kwargs["top_k"] = 8
