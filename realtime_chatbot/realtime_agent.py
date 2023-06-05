@@ -14,8 +14,7 @@ from .utils.generate_helpers import CompletionAndResponseStoppingCriteria
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, 
-                 use_fp16=True, override_contrastive_search=True):
+    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, use_fp16=True):
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
         self.tokenizer.truncation_side = "left"
@@ -31,8 +30,7 @@ class RealtimeAgent_Resources:
 
         self.model = self.model.to(self.device)
 
-        if override_contrastive_search:
-            self.model.contrastive_search = get_contrastive_search_override(self.model, 0.005, 1.0, sample_top_p=0.8)
+        self.model.contrastive_search_original = self.model.contrastive_search
 
     def create_agent(self, config=None):
         return RealtimeAgent(resources=self, config=config)
@@ -41,7 +39,9 @@ class RealtimeAgentConfig:
     def __init__(self, identities=None, user_identity="S1", agent_identity="S2", 
                  interval=0.8, max_history_words=100, max_agent_pause_duration=10.0, 
                  random_state=None, prevent_special_token_generation=False, summary=None,
-                 add_special_pause_token=False, predictive_lookahead=True, similarity_threshold=0.8):
+                 add_special_pause_token=False, predictive_lookahead=True, similarity_threshold=0.8,
+                 min_penalty_alpha=0.0, max_penalty_alpha=0.6, sample_top_p=0.7, 
+                 agent_starts_transcript=False, opening_utterance=None):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -56,6 +56,14 @@ class RealtimeAgentConfig:
         self.add_special_pause_token = add_special_pause_token
         self.predictive_lookahead = predictive_lookahead
         self.similarity_threshold = similarity_threshold
+
+        #Dynamic contrastive search params
+        self.min_penalty_alpha = min_penalty_alpha
+        self.max_penalty_alpha = max_penalty_alpha
+        self.sample_top_p = sample_top_p
+
+        self.agent_starts_transcript = agent_starts_transcript
+        self.opening_utterance = opening_utterance
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -90,6 +98,11 @@ class RealtimeAgent:
             "penalty_alpha": 0.1, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
             "top_k": 8
         }
+
+        # Set up dynamic contrastive search (TODO: this is not thread-safe if using multiple agent instances with one resources instance. 
+        # Refactor after contributing DCS to transformers library)
+        self._configure_contrastive_search()
+
         if self.config.prevent_special_token_generation:
             bad_words_ids = self.resources.tokenizer(["\n", self.resources.tokenizer.eos_token,
                 "participants:", " participants:", "Participants:", " Participants:",
@@ -112,6 +125,18 @@ class RealtimeAgent:
         self.prefix_length = None
         
         self.reset()
+
+    def _configure_contrastive_search(self):
+        if self.config.min_penalty_alpha != self.config.max_penalty_alpha or self.config.sample_top_p > 0.0:
+            self.resources.model.contrastive_search = get_contrastive_search_override(
+                self.resources.model, 
+                self.config.min_penalty_alpha, 
+                self.config.max_penalty_alpha, 
+                sample_top_p=self.config.sample_top_p
+            )
+        else:
+            self.resources.model.contrastive_search = self.resources.model.contrastive_search_original
+            self.generate_kwargs["penalty_alpha"] = self.config.min_penalty_alpha
 
     def _generate(self, sequence, stopping_criteria=None, take_tokens=None, return_generate_output=False, 
                   always_return_list=False, **generate_kwargs_overrides):
@@ -372,17 +397,20 @@ class RealtimeAgent:
         self.sequence = ""
         self.partial_pos = -1
         self._set_prefix()
-        self._set_current_speaker(self.config.user_identity)
+        starting_speaker = self.config.agent_identity if self.config.agent_starts_transcript else self.config.user_identity
+        self._set_current_speaker(starting_speaker)
         self.last_cycle_time = datetime.now()
         self.last_user_pause_time = None
         self.agent_pause_duration = 0.0
         self.response_cache = deque()
+        self.opening_utterance = self.config.opening_utterance.strip() if self.config.opening_utterance else None
 
     def set_config(self, config):
         do_set_prefix = config.identities != self.config.identities
         self.config = config
         if do_set_prefix:
             self._set_prefix()
+        self._configure_contrastive_search()
 
     def execute(self, next_input=None):
         output = None
@@ -437,7 +465,10 @@ class RealtimeAgent:
         if release_prediction:
             while not prediction or re.search(self.incomplete_pause_regex, prediction):
                 cached_chunk = self._release_cached_response_chunk()
-                if cached_chunk is not None:
+                if self.opening_utterance:
+                    prediction += f" {self.opening_utterance}"
+                    self.opening_utterance = None
+                elif cached_chunk is not None:
                     num_cached_chunks_released += 1
                     prediction += cached_chunk
                 else:

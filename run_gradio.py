@@ -57,7 +57,9 @@ class RealtimeAgentGradioInterface:
                 dialogue_unflattened[-1][1] += utt
         return dialogue_unflattened
 
-    def execute(self, state, audio, summary, reset, agent_interval, similarity_threshold, tts_downsampling_factor, tts_buffer_size, tts_enhancement,
+    def execute(self, state, audio, summary, opening_utt, reset, agent_starts, agent_interval, similarity_threshold, 
+                min_penalty_alpha, max_penalty_alpha, sample_top_p,
+                tts_downsampling_factor, tts_buffer_size, tts_enhancement,
                 asr_max_buffer_size, asr_model_size, asr_logprob_threshold, asr_no_speech_threshold, asr_lang,
                 user_name, user_age, user_sex, agent_name, agent_age, agent_sex, agent_voice):
 
@@ -78,7 +80,12 @@ class RealtimeAgentGradioInterface:
             prevent_special_token_generation=self.args.prevent_special_token_generation,
             add_special_pause_token=self.args.add_special_pause_token,
             predictive_lookahead=similarity_threshold < 1.0,
-            similarity_threshold=similarity_threshold
+            similarity_threshold=similarity_threshold,
+            min_penalty_alpha=min_penalty_alpha,
+            max_penalty_alpha=max_penalty_alpha,
+            sample_top_p=sample_top_p,
+            agent_starts_transcript=agent_starts,
+            opening_utterance=opening_utt
         )
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
@@ -126,49 +133,57 @@ class RealtimeAgentGradioInterface:
 
         asr_model_size = gr.Dropdown(label="ASR Model size", choices=self.asr_handler.available_model_sizes, value='base.en')
 
-        agent_interval_slider = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=0.8, step=0.1, label="Agent prediction interval")
-        similarity_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.8, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable)")
+        agent_interval_slider = gr.Slider(minimum=0.1, maximum=2.0, step=0.1, label="Agent prediction interval",
+                                          value=1.3 if self.args.tts_engine == "bark" else 0.8)
+        similarity_threshold_slider = gr.Slider(minimum=0.0, maximum=1.0, value=0.85, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable lookahead)")
 
-        tts_downsampling_factor_slider = gr.inputs.Slider(minimum=1, maximum=6, default=1, step=1, label="TTS downsampling factor")
-        tts_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=5, default=4, step=1, label="TTS buffer size")
+        
+        min_penalty_alpha_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Min Penalty-alpha")
+        max_penalty_alpha_slider = gr.Slider(0.0, 1.0, value=0.6, step=0.01, label="Max Penalty-alpha")
+        top_p_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.01, label="Top-p (0.0 to disable sampling)")
+
+        tts_downsampling_factor_slider = gr.Slider(minimum=1, maximum=6, value=1, step=1, label="TTS downsampling factor")
+        tts_buffer_size_slider = gr.Slider(minimum=1, maximum=5, step=1, label="TTS buffer size",
+                                           value=1 if self.args.tts_engine == "bark" else 4)
         tts_enhancement_dropdown = gr.Dropdown(label="TTS speech enhancement", choices=SpeechEnhancer.supported_models(), value="none")
-        asr_max_buffer_size_slider = gr.inputs.Slider(minimum=1, maximum=10, default=5, step=1, label="ASR max buffer size")
-        asr_logprob_threshold_slider = gr.inputs.Slider(minimum=-3.0, maximum=0.0, default=-0.7, step=0.05, label="ASR Log prob threshold")
-        asr_no_speech_threshold_slider = gr.inputs.Slider(minimum=0.0, maximum=1.0, default=0.6, step=0.05, label="ASR No speech threshold")
+        asr_max_buffer_size_slider = gr.Slider(minimum=1, maximum=10, value=5, step=1, label="ASR max buffer size")
+        asr_logprob_threshold_slider = gr.Slider(minimum=-3.0, maximum=0.0, value=-0.7, step=0.05, label="ASR Log prob threshold")
+        asr_no_speech_threshold_slider = gr.Slider(minimum=0.0, maximum=1.0, value=0.6, step=0.05, label="ASR No speech threshold")
 
-        asr_lang_dropdown = gr.inputs.Dropdown(choices=self.asr_handler.available_languages, label="ASR Language", 
-                                               default="English", type="value")
+        asr_lang_dropdown = gr.Dropdown(choices=self.asr_handler.available_languages, label="ASR Language", value="English")
 
         if asr_lang_dropdown==self.asr_handler.AUTO_DETECT_LANG:
             asr_lang_dropdown=None
 
         #user and agent identities
         default_identities = Identity.default_identities()
-        user_name_textbox = gr.inputs.Textbox(default=default_identities["S1"].name, label="User Name")
-        user_age_textbox = gr.inputs.Textbox(default=default_identities["S1"].age, label="User Age")
-        user_sex_dropdown = gr.inputs.Dropdown(
+        user_name_textbox = gr.Textbox(value=default_identities["S1"].name, label="User Name")
+        user_age_textbox = gr.Textbox(value=default_identities["S1"].age, label="User Age")
+        user_sex_dropdown = gr.Dropdown(
             choices=[default_identities["S1"].sex, "male", "female"], 
-            default=default_identities["S1"].sex, label="User Gender"
+            value=default_identities["S1"].sex, label="User Gender"
         )
-        agent_name_textbox = gr.inputs.Textbox(default=default_identities["S2"].name, label="Agent Name")
-        agent_age_textbox = gr.inputs.Textbox(default=default_identities["S2"].age, label="Agent Age")
-        agent_sex_dropdown = gr.inputs.Dropdown(
+        agent_name_textbox = gr.Textbox(value=default_identities["S2"].name, label="Agent Name")
+        agent_age_textbox = gr.Textbox(value=default_identities["S2"].age, label="Agent Age")
+        agent_sex_dropdown = gr.Dropdown(
             choices=[default_identities["S2"].sex, "male", "female"], 
-            default=default_identities["S2"].sex, label="Agent Gender"
+            value=default_identities["S2"].sex, label="Agent Gender"
         )
         agent_voice_dropdown = gr.Dropdown(
             choices=self.tts_handler.available_speakers, 
-            value=self.tts_handler.available_speakers[0],
+            value="en_speaker_8" if self.args.tts_engine == "bark" else "Voice 16",
             label="Agent Voice"
         )
 
         dialogue_chatbot = gr.Chatbot(label="Dialogue").style(color_map=("green", "pink"))
         reset_button = gr.Checkbox(value=True, label="Reset (holds agent in reset state until unchecked)",
                                    elem_id="reset_button")
-        summary_textbox = gr.inputs.Textbox(
-            label="Dialogue Summary", 
-            default="S1 and S2 are talking about what's new in their lives."
+        agent_starts_button = gr.Checkbox(value=True, label="Agent Starts (is the opening speaker)", elem_id="agent_starts_button")
+        summary_textbox = gr.Textbox(
+            label="Dialogue Summary Prompt", 
+            value="S1 and S2 are talking about what's new in their lives."
         )
+        opening_utt_textbox = gr.Textbox(label="Opening Utterance (agent only)", value="Hi! How are you?")
         
         state = gr.State({
             "dialogue": [], 
@@ -183,9 +198,14 @@ class RealtimeAgentGradioInterface:
                 state,
                 gr.Audio(source="microphone", streaming=True, label="ASR Input"),
                 summary_textbox,
+                opening_utt_textbox,
                 reset_button,
+                agent_starts_button,
                 agent_interval_slider,
                 similarity_threshold_slider,
+                min_penalty_alpha_slider,
+                max_penalty_alpha_slider,
+                top_p_slider,
                 tts_downsampling_factor_slider,
                 tts_buffer_size_slider,
                 tts_enhancement_dropdown,

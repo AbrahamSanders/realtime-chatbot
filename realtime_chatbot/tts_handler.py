@@ -15,7 +15,7 @@ class TTSConfig:
         if tts_engine not in ["fastspeech2", "bark"]:
             raise ValueError(f"tts_engine must be one of [fastspeech2, bark], but got {tts_engine}")
         if speaker is None:
-            speaker = "Voice 1" if tts_engine == "fastspeech2" else "v2/en_speaker_6"
+            speaker = "en_speaker_8" if tts_engine == "bark" else "Voice 16"
         self.tts_engine = tts_engine
         self.buffer_size = buffer_size
         self.downsampling_factor = downsampling_factor
@@ -166,7 +166,7 @@ class FastSpeech2TTSHandler(TTSHandler):
 
     def _sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "", text)
-        text = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?:\s|\A)i?[hx]+[.,?!]*(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[%.*?\]", "", text)
@@ -198,32 +198,38 @@ class FastSpeech2TTSHandler(TTSHandler):
         return wav, rate
     
 class BarkTTSHandler(TTSHandler):
-    def __init__(self, device=None, config=None, condition_on_previous_generation=True, reset_prev_conditioning_after=5):
+    def __init__(self, device=None, config=None, condition_on_previous_generation=False, reset_prev_conditioning_after=5):
         super().__init__(device, config, handle_pauses=False)
 
         from bark import SAMPLE_RATE
         from bark.generation import _load_history_prompt
-        from .bark_api_mod import generate_audio
+        from .bark_api_mod import generate_audio, concat_prompts
         from .bark_generation_mod import preload_models
         self.sample_rate = SAMPLE_RATE
         self._load_history_prompt = _load_history_prompt
+        self.concat_prompts = concat_prompts
         self.generate_audio = generate_audio
 
-        preload_models(device, text_use_small=True, coarse_use_small=True, fine_use_small=True)
+        preload_models(device, text_use_small=True, coarse_use_small=True, fine_use_small=False)
 
         self.bark_prompt_lookup = BarkTTSHandler.get_bark_prompt_lookup()
-        self.speaker_history_prompt = dict(
-            _load_history_prompt(self.bark_prompt_lookup[config.speaker.replace("/", os.path.sep)])
-        )
+        self._setup_history_prompt()
         self.condition_on_previous_generation = condition_on_previous_generation
         self.reset_prev_conditioning_after = reset_prev_conditioning_after
         self.last_segment = ""
         self.last_generated_tokens = None
         self.num_consecutive_prev_conditioning = 0
 
+    def _setup_history_prompt(self, repeat_prompt=False):
+        self.speaker_history_prompt = dict(
+            self._load_history_prompt(self.bark_prompt_lookup[self.config.speaker.replace("/", os.path.sep)])
+        )
+        if repeat_prompt and not self.config.speaker.startswith("v2"):
+            self.speaker_history_prompt = self.concat_prompts(self.speaker_history_prompt, self.speaker_history_prompt)
+
     def _sanitize_text_for_tts(self, text):
-        text = re.sub(self.pause_regex, "...", text)
-        text = re.sub(r"(?:\s|\A)i?[hx]+(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
+        text = re.sub(self.pause_regex, "" if self.handle_pauses else "...", text)
+        text = re.sub(r"(?:\s|\A)i?[hx]+[.,?!]*(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[% ", "[", text)
@@ -247,22 +253,20 @@ class BarkTTSHandler(TTSHandler):
         self.last_generated_tokens, wav = self.generate_audio(
             gen_input, history_prompt=self.speaker_history_prompt, prefix_prompt=prefix_prompt,
             text_temp=0.7, waveform_temp=0.7, silent=True, output_full=True, min_eos_p=0.05, 
-            max_gen_duration_s=max(1.0, len(segment.split()) / 1.25)
+            max_gen_duration_s=max(1.0, len(segment.split()) / 0.65)
         )
-        wav = torch.tensor((wav * 32767), dtype=torch.float32)
+        wav = torch.tensor((wav * 32767), dtype=torch.float32, device=self.device)
         rate = self.sample_rate
         self.last_segment = segment
         return wav, rate
 
     def set_config(self, config):
         if config.speaker != self.config.speaker:
-            self.speaker_history_prompt = dict(
-                self._load_history_prompt(self.bark_prompt_lookup[config.speaker.replace("/", os.path.sep)])
-            )
             self.last_segment = ""
             self.last_generated_tokens = None
             self.num_consecutive_prev_conditioning = 0
         super().set_config(config)
+        self._setup_history_prompt()
 
     @staticmethod
     def get_bark_prompt_lookup():

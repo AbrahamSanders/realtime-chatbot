@@ -137,3 +137,6 @@ data/*
 rtchat-*/
 
 speechbrain/*
+
+evals_output_*.csv
+eval_results_*.txt

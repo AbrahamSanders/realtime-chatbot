@@ -7,7 +7,6 @@ from torch.nn import CrossEntropyLoss
 from sklearn.metrics import precision_score, recall_score, f1_score
 
 from ..realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
-from ..dynamic_contrastive import get_contrastive_search_override
 
 from .data_processing import get_prediction_examples, classes
 
@@ -18,14 +17,12 @@ def get_agent(args, device=None):
     agent = RealtimeAgent(
         resources=RealtimeAgent_Resources(
             modelpath=args.agent_modelpath, 
-            device=device, 
-            override_contrastive_search=False),
+            device=device),
         config=RealtimeAgentConfig(
             random_state=args.random_state,
             prevent_special_token_generation=args.prevent_special_token_generation,
             add_special_pause_token=args.add_special_pause_token)
     )
-    agent.resources.model.contrastive_search_original = agent.resources.model.contrastive_search
     return agent
 
 def get_batch_size(args, decoding_type):
@@ -46,16 +43,17 @@ def set_generate_kwargs(agent, decoding_type):
         agent.generate_kwargs["do_sample"] = True
         agent.generate_kwargs["typical_p"] = 0.95
     if "contrastive" in decoding_type:
-        agent.generate_kwargs["penalty_alpha"] = 0.6
+        penalty_alpha = 0.6
+        agent.generate_kwargs["penalty_alpha"] = penalty_alpha
         agent.generate_kwargs["top_k"] = 8
-    if decoding_type == "contrastive":
-        agent.resources.model.contrastive_search = agent.resources.model.contrastive_search_original
-    if decoding_type == "dynamic_contrastive":
-        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.0, 1.0)
-    if decoding_type == "contrastive_sampling":
-        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.6, 0.6, sample_top_p=0.8)
-    if decoding_type == "dynamic_contrastive_sampling":
-        agent.resources.model.contrastive_search = get_contrastive_search_override(agent.resources.model, 0.0, 1.0, sample_top_p=0.8)
+        agent.config.min_penalty_alpha = penalty_alpha
+        agent.config.max_penalty_alpha = penalty_alpha
+        agent.config.sample_top_p = 0.0
+        if "dynamic" in decoding_type:
+            agent.config.min_penalty_alpha = 0.0
+        if "sampling" in decoding_type:
+            agent.config.sample_top_p = 0.8
+        agent._configure_contrastive_search()
         
 def load_test_data(filename):
     with open(filename, "r", encoding="utf-8") as f:
