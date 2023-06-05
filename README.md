@@ -103,7 +103,7 @@ To train an agent model, first prepare the dataset and then run the HuggingFace 
 ### Prepare the dataset
 This script downloads, pre-processes and formats talkbank conversational corpora into text files for training, also handling separation into train, dev, and test splits. Simply run:
 ```bash
-python prep_datast.py
+python prep_datast.py --standardize-pauses
 ```
 The dataset files will be placed into the `data` folder.
 
