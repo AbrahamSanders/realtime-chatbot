@@ -1,6 +1,7 @@
 import random
 import pandas as pd
 from datetime import datetime
+from scipy.stats import hmean
 
 from realtime_chatbot.utils import args_helpers
 from realtime_chatbot.evals import common as cm
@@ -83,10 +84,14 @@ if __name__ == "__main__":
         pred_results_df = pd.DataFrame.from_dict(pred_results_dict)
         pred_results_df.index = args.decoding_type
 
-        # overall metric, computed from all metrics except precision (prec) and recall (rec) 
+        # overall metrics, computed from all except precision (prec) and recall (rec) 
         # because they are redundant with f1 when averaged
-        metrics_to_include = [metric for metric in pred_results_dict if not metric.endswith("rec")]
-        pred_results_df["overall"] = pred_results_df[metrics_to_include].mean(axis=1)
+        non_verbal_metrics_to_include = [metric for metric in pred_results_dict if metric.startswith("pred_") and metric.endswith("_f1")]
+        verbal_metrics_to_include = [metric for metric in pred_results_dict if metric.startswith("response_")]
+        pred_results_df["avg_non_verbal"] = pred_results_df[non_verbal_metrics_to_include].mean(axis=1)
+        pred_results_df["avg_verbal"] = pred_results_df[verbal_metrics_to_include].mean(axis=1)
+        # overall is the harmonic mean between avg_non_verbal and avg_verbal
+        pred_results_df["overall"] = hmean(pred_results_df[["avg_non_verbal", "avg_verbal"]], axis=1)
 
         print(pred_results_df)
         print()
