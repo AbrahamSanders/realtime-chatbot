@@ -41,7 +41,7 @@ class RealtimeAgentConfig:
                  random_state=None, prevent_special_token_generation=False, summary=None,
                  add_special_pause_token=False, predictive_lookahead=True, similarity_threshold=0.8,
                  min_penalty_alpha=0.0, max_penalty_alpha=0.6, sample_top_p=0.7, 
-                 agent_starts_transcript=False, opening_utterance=None):
+                 agent_starts_transcript=False, opening_utterance=None, debug=False):
         if identities is None:
             identities = Identity.default_identities()
         self.identities = identities
@@ -64,6 +64,7 @@ class RealtimeAgentConfig:
 
         self.agent_starts_transcript = agent_starts_transcript
         self.opening_utterance = opening_utterance
+        self.debug = debug
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
@@ -197,7 +198,6 @@ class RealtimeAgent:
     def _set_current_speaker(self, identity):
         self.sequence += f" {identity}:"
         self.current_speaker = identity
-        self.last_prediction = None
 
     def _trim_sequence(self):
         dialog_history = self.sequence[self.prefix_length:]
@@ -352,7 +352,9 @@ class RealtimeAgent:
             is_turn_switch = next_token == turn_switch_token
         else:
             # Otherwise, make a new utterance completion prediction.
-            stopping_criteria = StoppingCriteriaList([CompletionAndResponseStoppingCriteria(turn_switch_token_id)])
+            stopping_criteria = StoppingCriteriaList([
+                CompletionAndResponseStoppingCriteria(turn_switch_token_id, max(self.generate_kwargs["max_new_tokens"], 10))
+            ])
             _, outputs = self._generate(
                 input_ids, stopping_criteria=stopping_criteria, 
                 return_generate_output=True, output_hidden_states=True, max_new_tokens=80
@@ -363,10 +365,17 @@ class RealtimeAgent:
             completion_end_pos = input_ids.shape[-1] + completion_length
             prediction.completion = self.resources.tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:completion_end_pos], skip_special_tokens=False)
             prediction.response = self.resources.tokenizer.decode(outputs.sequences[0, completion_end_pos:], skip_special_tokens=False).rstrip(turn_switch_token)
+            # separate speaker identity from response
             response_speaker_match = re.search(self.any_identity_regex, prediction.response)
             if response_speaker_match:
                 prediction.response = prediction.response[response_speaker_match.end()+1:]
                 prediction.response_speaker = response_speaker_match[0]
+            # remove incomplete pause from response (otherwise it will trigger more generation after cache retrieval)
+            response_incomplete_pause_match = re.search(self.incomplete_pause_regex, prediction.response)
+            if response_incomplete_pause_match:
+                prediction.response = prediction.response[:response_incomplete_pause_match.start()].rstrip()
+            # if the completion is empty, this indicates a turn switch (the completion prediction began with a turn switch token).
+            # otherwise, we mean pool the hidden states of the generated completion tokens to get the next completion embedding.
             is_turn_switch = True
             if completion_length > 0:
                 prediction.embedding = torch.cat([pos_states[-1] for pos_states in outputs.hidden_states[1:completion_length+1]], dim=1).mean(dim=1)
@@ -375,7 +384,6 @@ class RealtimeAgent:
         return prediction, is_turn_switch, similarity_with_last_pred
 
     def _cache_response(self, response):
-        #print(f"_cache_response called: '{response}'")
         self.response_cache.clear()
         # divide response into k chunks to be released one at a time at every agent interval
         response_tokens = self.resources.tokenizer.encode(response, add_special_tokens=False)
@@ -388,9 +396,7 @@ class RealtimeAgent:
     def _release_cached_response_chunk(self):
         if len(self.response_cache) > 0:
             released_chunk = self.response_cache.popleft()
-            #print (f"_release_cached_response_chunk called: '{released_chunk}'")
             return released_chunk
-        #print ("_release_cached_response_chunk called: None")
         return None
 
     def reset(self):
@@ -399,6 +405,7 @@ class RealtimeAgent:
         self._set_prefix()
         starting_speaker = self.config.agent_identity if self.config.agent_starts_transcript else self.config.user_identity
         self._set_current_speaker(starting_speaker)
+        self.last_prediction = None
         self.last_cycle_time = datetime.now()
         self.last_user_pause_time = None
         self.agent_pause_duration = 0.0
@@ -435,8 +442,9 @@ class RealtimeAgent:
 
         # If it is not time to run the next predict/output cycle yet, just return nothing.
         # Otherwise, set the last cycle time to now and proceed.
+        agent_interval = self.config.interval if self.current_speaker == self.config.agent_identity else min(self.config.interval, 0.8)
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
-        if seconds_since_last_cycle < max(self.config.interval, self.agent_pause_duration):
+        if seconds_since_last_cycle < max(agent_interval, self.agent_pause_duration):
             return output, output_for_cache, sequence_changed
         self.last_cycle_time = datetime.now()
 
@@ -457,8 +465,13 @@ class RealtimeAgent:
                     # ~ indicates a response candidate to be chunked, pre-cached, and released later 
                     # by downstream processors (e.g., TTS handler)
                     output_for_cache = f"~[{len(self.response_cache)}]{self.last_prediction.response}"
+                    if self.config.debug:
+                        print(f"Similarity: {similarity_with_last_pred:.2f} < {self.config.similarity_threshold:.2f}: Caching response '{output_for_cache}'...")
+            elif self.config.debug:
+                print(f"Similarity: {similarity_with_last_pred:.2f} >= {self.config.similarity_threshold:.2f}: Keeping previously cached response.")
             if is_turn_switch and is_predicted_agent_response:
                 self._set_current_speaker(self.config.agent_identity)
+                self.last_prediction = None
                 release_prediction = True
         
         prediction = ""

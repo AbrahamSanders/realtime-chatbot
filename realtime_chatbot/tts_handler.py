@@ -229,11 +229,12 @@ class BarkTTSHandler(TTSHandler):
 
     def _sanitize_text_for_tts(self, text):
         text = re.sub(self.pause_regex, "" if self.handle_pauses else "...", text)
-        text = re.sub(r"(?:\s|\A)i?[hx]+[.,?!]*(?=(?:\s|\Z))", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?:\s|\A)i?[hx]+[.,?!]*(?=(?:\s|\Z))", " [breath]", text, flags=re.IGNORECASE)
         text = re.sub(r"0 ?(?=\[)", "", text)
         text = re.sub("0[.]", "", text)
         text = re.sub(r"\[% ", "[", text)
         text = re.sub(r"&=(.*?)(?=(?:\s|\Z))", lambda m: f"[{m.group(1).lower()}]", text)
+        text = re.sub(r"\[[^\]]*?sing.*?\]", "♪", text, flags=re.IGNORECASE)
         text = re.sub(r" +\.\.\.", "...", text)
         text = text.lstrip(".")
         text = re.sub(" {2,}", " ", text)
@@ -250,10 +251,14 @@ class BarkTTSHandler(TTSHandler):
             gen_input = segment
             prefix_prompt = None
         
+        max_duration_coeff = 2.0 if "♪" in segment else 1.5
+        top_p = 0.95 if re.search(r"\[[^\]]*?(?:cough|throat).*?\]", segment, flags=re.IGNORECASE) else None
+
         self.last_generated_tokens, wav = self.generate_audio(
             gen_input, history_prompt=self.speaker_history_prompt, prefix_prompt=prefix_prompt,
-            text_temp=0.7, waveform_temp=0.7, silent=True, output_full=True, min_eos_p=0.05, 
-            max_gen_duration_s=max(1.0, len(segment.split()) / 0.65)
+            text_temp=0.7, text_top_p=top_p, waveform_temp=0.7, waveform_top_p=top_p,
+            silent=True, output_full=True, min_eos_p=0.05, 
+            max_gen_duration_s=max(1.0, len(segment.split()) * max_duration_coeff)
         )
         wav = torch.tensor((wav * 32767), dtype=torch.float32, device=self.device)
         rate = self.sample_rate
@@ -327,18 +332,28 @@ class TTSHandlerMultiprocessing:
                 # First, pull any items that are slated for caching off the input buffer
                 # and process them immediately.
                 tmp_input_buffer = []
+                cache_items = []
                 for item in input_buffer:
-                    # to be cached...
-                    if item.startswith("~"):
-                        _ = list(handler.render_audio(item))
-                    # to be released from cache...
-                    elif item.startswith("*"):
-                        for wav, rate in handler.render_audio(item):
-                            wav = wav.cpu().numpy()
-                            self.output_queue.put((rate, wav))
+                    if item.startswith("~") or item.startswith("*"):
+                        cache_items.append(item)
                     else:
                         tmp_input_buffer.append(item)
                 input_buffer = tmp_input_buffer
+
+                # Process the cache items
+                for i, item in enumerate(cache_items):
+                    # to be cached...
+                    if item.startswith("~"):
+                        # only cache the last consecutive item starting with '~', otherwise we'll waste time rendering
+                        # and caching stale audio that will be immediately replaced
+                        if i < len(cache_items)-1 and cache_items[i+1].startswith("~"):
+                            continue
+                        _ = list(handler.render_audio(item))
+                    # to be released from cache...
+                    else:
+                        for wav, rate in handler.render_audio(item):
+                            wav = wav.cpu().numpy()
+                            self.output_queue.put((rate, wav))
 
                 # Next, determine what items in the input buffer to process:
                 # - If the buffer is full, process the whole buffer. 

@@ -46,7 +46,7 @@ def get_process_method(model, tokenizer, device):
             is_turn_switch = outputs[0, -1].item() == turn_switch_token_id
         else:
             # Otherwise, make a new utterance completion prediction.
-            stopping_criteria = StoppingCriteriaList([CompletionAndResponseStoppingCriteria(turn_switch_token_id)])
+            stopping_criteria = StoppingCriteriaList([CompletionAndResponseStoppingCriteria(turn_switch_token_id, max_new_tokens)])
             outputs = model.generate(
                 input_ids=input_ids, output_hidden_states=True, return_dict_in_generate=True, max_new_tokens=2*max_new_tokens, 
                 stopping_criteria=stopping_criteria, **generate_kwargs

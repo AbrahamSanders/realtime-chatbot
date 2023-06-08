@@ -22,7 +22,8 @@ class RealtimeAgentGradioInterface:
             wait_until_running=False,
             config=RealtimeAgentConfig(random_state=self.args.random_state, 
                                        prevent_special_token_generation=self.args.prevent_special_token_generation,
-                                       add_special_pause_token=self.args.add_special_pause_token),
+                                       add_special_pause_token=self.args.add_special_pause_token,
+                                       debug=self.args.debug),
             modelpath=self.args.agent_modelpath,
             device=device_map["agent"],
             chain_to_input_queue=self.tts_handler.input_queue, 
@@ -85,7 +86,8 @@ class RealtimeAgentGradioInterface:
             max_penalty_alpha=max_penalty_alpha,
             sample_top_p=sample_top_p,
             agent_starts_transcript=agent_starts,
-            opening_utterance=opening_utt
+            opening_utterance=opening_utt,
+            debug=self.args.debug
         )
         if agent_config != state["agent_config"]:
             state["agent_config"] = agent_config
@@ -135,7 +137,7 @@ class RealtimeAgentGradioInterface:
 
         agent_interval_slider = gr.Slider(minimum=0.1, maximum=2.0, step=0.1, label="Agent prediction interval",
                                           value=1.3 if self.args.tts_engine == "bark" else 0.8)
-        similarity_threshold_slider = gr.Slider(minimum=0.0, maximum=1.0, value=0.85, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable lookahead)")
+        similarity_threshold_slider = gr.Slider(minimum=0.0, maximum=1.0, value=0.8, step=0.01, label="Predictive lookahead similarity threshold (1.0 to disable lookahead)")
 
         
         min_penalty_alpha_slider = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Min Penalty-alpha")
@@ -188,7 +190,7 @@ class RealtimeAgentGradioInterface:
         state = gr.State({
             "dialogue": [], 
             "asr_config": ASRConfig(), 
-            "agent_config": RealtimeAgentConfig(random_state=self.args.random_state),
+            "agent_config": RealtimeAgentConfig(random_state=self.args.random_state, debug=self.args.debug),
             "tts_config": TTSConfig()
         })
 
