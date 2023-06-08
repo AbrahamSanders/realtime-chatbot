@@ -88,7 +88,7 @@ While you type, words are submitted to the agent after `space` or `enter` are pr
 
 ## Reproduce Paper Results
 To reproduce the results in tables 4 & 5 in the paper:
-1. Ensure `data/dataset_test.txt` exists (details on obtaining this TBD due to TalkBank corpora licenses)
+1. Ensure `data/dataset_test.txt` exists (details on distributing this TBD due to TalkBank corpora licenses)
 2. Run the evaluation script:
 ```bash
 python run_evals.py > eval_results_all.txt
