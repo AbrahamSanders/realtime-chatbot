@@ -411,6 +411,8 @@ class RealtimeAgent:
         self.agent_pause_duration = 0.0
         self.response_cache = deque()
         self.opening_utterance = self.config.opening_utterance.strip() if self.config.opening_utterance else None
+        if self.config.debug:
+            print("\n>>> RESET <<<\n")
 
     def set_config(self, config):
         do_set_prefix = config.identities != self.config.identities
@@ -442,7 +444,7 @@ class RealtimeAgent:
 
         # If it is not time to run the next predict/output cycle yet, just return nothing.
         # Otherwise, set the last cycle time to now and proceed.
-        agent_interval = self.config.interval if self.current_speaker == self.config.agent_identity else min(self.config.interval, 0.8)
+        agent_interval = self.config.interval if self.current_speaker == self.config.agent_identity else min(self.config.interval, 0.4)
         seconds_since_last_cycle = (datetime.now() - self.last_cycle_time).total_seconds()
         if seconds_since_last_cycle < max(agent_interval, self.agent_pause_duration):
             return output, output_for_cache, sequence_changed

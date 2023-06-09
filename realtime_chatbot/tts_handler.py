@@ -251,7 +251,7 @@ class BarkTTSHandler(TTSHandler):
             gen_input = segment
             prefix_prompt = None
         
-        max_duration_coeff = 2.0 if "♪" in segment else 1.5
+        max_duration_coeff = 2.0 if "♪" in segment else 1.6
         top_p = 0.95 if re.search(r"\[[^\]]*?(?:cough|throat).*?\]", segment, flags=re.IGNORECASE) else None
 
         self.last_generated_tokens, wav = self.generate_audio(
