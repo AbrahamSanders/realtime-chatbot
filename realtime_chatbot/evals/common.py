@@ -37,7 +37,8 @@ def set_generate_kwargs(agent, decoding_type):
         "pad_token_id": agent.resources.tokenizer.pad_token_id,
         "eos_token_id": agent.resources.tokenizer.eos_token_id,
         "do_sample": False,
-        "temperature": 1.0
+        "temperature": 1.0,
+        "top_p": 1.0
     }
     if decoding_type == "nucleus":
         agent.generate_kwargs["do_sample"] = True
