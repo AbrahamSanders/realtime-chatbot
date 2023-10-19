@@ -11,4 +11,7 @@ sshkeyboard
 torch
 torchaudio
 tqdm
-transformers>=4.24.0
+transformers>=4.34.1
+accelerate
+datasets<2.8
+peft

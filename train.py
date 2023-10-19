@@ -55,6 +55,7 @@ from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
+from peft import LoraConfig
 
 from realtime_chatbot.utils.training_helpers import (
     DataCollatorWithPaddingAndLabels,
@@ -126,6 +127,24 @@ class ModelArguments:
                 "with private models)."
             )
         },
+    )
+    use_peft: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use LoRA for memory-efficient training."
+        }
+    )
+    peft_lora_r: int = field(
+        default=64,
+        metadata={
+            "help": "LoRA r parameter."
+        }
+    )
+    peft_lora_alpha: int = field(
+        default=16,
+        metadata={
+            "help": "LoRA alpha parameter."
+        }
     )
     use_anchor_model: bool = field(
         default=False,
@@ -462,10 +481,14 @@ def main():
     if data_args.add_special_tokens:
         special_tokens = {"additional_special_tokens": [" <p>"]}
         tokenizer.add_special_tokens(special_tokens)
-        
-    model.resize_token_embeddings(len(tokenizer))
-    if model_args.use_anchor_model:
-        anchor_model.resize_token_embeddings(len(tokenizer))
+    
+    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+    # on a small vocab and want a smaller embedding size, remove this test.
+    embedding_size = model.get_input_embeddings().weight.shape[0]
+    if len(tokenizer) > embedding_size:
+        model.resize_token_embeddings(len(tokenizer))
+        if model_args.use_anchor_model:
+            anchor_model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -591,6 +614,15 @@ def main():
             return metric.compute(predictions=preds, references=labels)
 
     # Initialize our Trainer
+    if training_args.do_train and model_args.use_peft:
+        peft_config = LoraConfig(
+            r=model_args.peft_lora_r,
+            lora_alpha=model_args.peft_lora_alpha,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        model.add_adapter(peft_config)
+        
     trainer_kwargs = {
         "model": model,
         "args": training_args,

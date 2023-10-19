@@ -134,9 +134,14 @@ dmypy.json
 data/*
 !data/readme.md
 
+experimental
+
 rtchat-*/
+*-realtime-chat-*/
 
 speechbrain/*
 
-evals_output_*.csv
-eval_results_*.txt
+evals_output_*
+eval_results_*
+
+compare_generators.py

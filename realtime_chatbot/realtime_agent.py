@@ -11,12 +11,14 @@ from collections import deque
 from .identity import Identity
 from .utils import queue_helpers
 from .utils.generate_helpers import CompletionAndResponseStoppingCriteria
+from .utils.tokenization_helpers import decode_with_prefix_space, get_token_id
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
     def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, use_fp16=True):
         # Tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=False)
+        use_fast = "opt-" not in modelpath
+        self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=use_fast)
         self.tokenizer.truncation_side = "left"
         # Device
         if device is None:
@@ -95,6 +97,7 @@ class RealtimeAgent:
         self.generate_kwargs = {
             "pad_token_id": self.resources.tokenizer.pad_token_id,
             "eos_token_id": self.resources.tokenizer.eos_token_id,
+            "do_sample": False,
             "max_new_tokens": 7,
             "penalty_alpha": 0.1, # penalty_alpha is overridden by dynamic contrastive search, but needs to be set to something > 0
             "top_k": 8
@@ -177,8 +180,8 @@ class RealtimeAgent:
         for i in range(outputs.sequences.shape[0]):
             response_start_idx = inputs["input_ids"].shape[-1]
             response_end_idx = response_start_idx + take_tokens if take_tokens is not None else outputs.sequences.shape[-1]
-            generated_text = self.resources.tokenizer.decode(outputs.sequences[i, response_start_idx:response_end_idx], 
-                                                             skip_special_tokens=False)
+            response_tokens = outputs.sequences[i, response_start_idx:response_end_idx]
+            generated_text = decode_with_prefix_space(self.resources.tokenizer, response_tokens, skip_special_tokens=False)
             generated_text = generated_text.replace(self.resources.tokenizer.pad_token, "")
             generated_text = generated_text.replace(self.resources.tokenizer.eos_token, "")
             # If a regex stopping criteria is specified, check for it and discard anything
@@ -344,7 +347,7 @@ class RealtimeAgent:
             similarity_with_last_pred = 1.0 if last_pred_embedding_exists else -1.0
 
         turn_switch_token = " S"
-        turn_switch_token_id = self.resources.tokenizer(turn_switch_token, add_special_tokens=False).input_ids[0]
+        turn_switch_token_id = get_token_id(self.resources.tokenizer, turn_switch_token)
         if similarity_with_last_pred >= self.config.similarity_threshold:
             # If last prediction is similar enough to the actual completion, no need to make a new prediction. Just check if we're at a turn-switch.
             prediction = last_prediction
@@ -363,8 +366,8 @@ class RealtimeAgent:
             prediction.context_pos = len(self.sequence)
             completion_length = stopping_criteria[0].completion_length
             completion_end_pos = input_ids.shape[-1] + completion_length
-            prediction.completion = self.resources.tokenizer.decode(outputs.sequences[0, input_ids.shape[-1]:completion_end_pos], skip_special_tokens=False)
-            prediction.response = self.resources.tokenizer.decode(outputs.sequences[0, completion_end_pos:], skip_special_tokens=False).rstrip(turn_switch_token)
+            prediction.completion = decode_with_prefix_space(self.resources.tokenizer, outputs.sequences[0, input_ids.shape[-1]:completion_end_pos], skip_special_tokens=False)
+            prediction.response = decode_with_prefix_space(self.resources.tokenizer, outputs.sequences[0, completion_end_pos:], skip_special_tokens=False).rstrip(turn_switch_token)
             # separate speaker identity from response
             response_speaker_match = re.search(self.any_identity_regex, prediction.response)
             if response_speaker_match:
@@ -390,7 +393,7 @@ class RealtimeAgent:
         chunk_size = self.generate_kwargs["max_new_tokens"]
         num_chunks = math.ceil(len(response_tokens) / chunk_size)
         for i in range(num_chunks):
-            chunk = self.resources.tokenizer.decode(response_tokens[i*chunk_size:(i+1)*chunk_size], skip_special_tokens=False)
+            chunk = decode_with_prefix_space(self.resources.tokenizer, response_tokens[i*chunk_size:(i+1)*chunk_size], skip_special_tokens=False)
             self.response_cache.append(chunk)
 
     def _release_cached_response_chunk(self):

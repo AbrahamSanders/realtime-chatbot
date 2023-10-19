@@ -7,6 +7,7 @@ from torch.nn import CrossEntropyLoss
 from sklearn.metrics import precision_score, recall_score, f1_score
 
 from ..realtime_agent import RealtimeAgent, RealtimeAgent_Resources, RealtimeAgentConfig
+from ..utils.tokenization_helpers import get_token_id
 
 from .data_processing import get_prediction_examples, classes
 
@@ -34,7 +35,9 @@ def get_batch_size(args, decoding_type):
 def set_generate_kwargs(agent, decoding_type):
     agent.generate_kwargs = {
         "pad_token_id": agent.resources.tokenizer.pad_token_id,
-        "eos_token_id": agent.resources.tokenizer.eos_token_id
+        "eos_token_id": agent.resources.tokenizer.eos_token_id,
+        "do_sample": False,
+        "temperature": 1.0
     }
     if decoding_type == "nucleus":
         agent.generate_kwargs["do_sample"] = True
@@ -61,7 +64,7 @@ def load_test_data(filename):
 
 def get_losses(agent, examples, batch_size, from_last_idx_of_token, show_progress=True):
     losses = []
-    from_last_idx_of_token_id = agent.resources.tokenizer(from_last_idx_of_token, add_special_tokens=False).input_ids[0]
+    from_last_idx_of_token_id = get_token_id(agent.resources.tokenizer, from_last_idx_of_token)
     for start_index in trange(0, len(examples), batch_size, desc="Computing Losses", disable=not show_progress):
         examples_batch = examples[start_index : start_index+batch_size]
         inputs = agent.resources.tokenizer(
@@ -88,7 +91,7 @@ def get_losses(agent, examples, batch_size, from_last_idx_of_token, show_progres
 def get_predictions(agent, examples, batch_size, eos_token, strip_eos_token, max_new_tokens, decoding_type, show_progress=True):
     predictions = []
     set_generate_kwargs(agent, decoding_type)
-    eos_token_id = agent.resources.tokenizer(eos_token, add_special_tokens=False).input_ids[0]
+    eos_token_id = get_token_id(agent.resources.tokenizer, eos_token)
     for start_index in trange(0, len(examples), batch_size, desc="Computing Predictions", disable=not show_progress):
         examples_batch = examples[start_index : start_index+batch_size]
         batch_preds = agent._generate(examples_batch, eos_token_id=eos_token_id, max_new_tokens=max_new_tokens)
