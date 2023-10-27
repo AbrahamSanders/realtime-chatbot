@@ -18,7 +18,9 @@ def get_agent(args, device=None):
     agent = RealtimeAgent(
         resources=RealtimeAgent_Resources(
             modelpath=args.agent_modelpath, 
-            device=device),
+            device=device,
+            use_fp16=args.use_fp16,
+            use_bf16=args.use_bf16),
         config=RealtimeAgentConfig(
             random_state=args.random_state,
             prevent_special_token_generation=args.prevent_special_token_generation,
@@ -42,10 +44,10 @@ def set_generate_kwargs(agent, decoding_type):
     }
     if decoding_type == "nucleus":
         agent.generate_kwargs["do_sample"] = True
-        agent.generate_kwargs["top_p"] = 0.95
+        agent.generate_kwargs["top_p"] = 0.9
     if decoding_type == "typical":
         agent.generate_kwargs["do_sample"] = True
-        agent.generate_kwargs["typical_p"] = 0.95
+        agent.generate_kwargs["typical_p"] = 0.9
     if "contrastive" in decoding_type:
         penalty_alpha = 0.6
         agent.generate_kwargs["penalty_alpha"] = penalty_alpha

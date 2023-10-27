@@ -20,12 +20,14 @@ def get_filename_suffix(option_list):
 if __name__ == "__main__":
     parser = args_helpers.get_common_arg_parser()
     parser.add_argument("--test-data", default="data/dataset_test.txt")
-    parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--contrastive-batch-size", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--contrastive-batch-size", type=int, default=2)
     parser.add_argument("--num-examples", type=int, default=-1)
     parser.add_argument("--data-random-state", type=int, default=42)
     parser.add_argument("--eval-type", choices=["all"] + cm.SUPPORTED_EVAL_TYPES, default=["all"], nargs="+")
     parser.add_argument("--decoding-type", choices=["all"] + cm.SUPPORTED_DECODING_TYPES, default=["all"], nargs="+")
+    parser.add_argument("--use-fp16" , action="store_true", default=False)
+    parser.add_argument("--use-bf16" , action="store_true", default=False)
     args = parser.parse_args()
 
     if args.random_state is None:

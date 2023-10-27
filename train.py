@@ -135,7 +135,7 @@ class ModelArguments:
         }
     )
     peft_lora_r: int = field(
-        default=64,
+        default=8,
         metadata={
             "help": "LoRA r parameter."
         }
@@ -618,6 +618,8 @@ def main():
         peft_config = LoraConfig(
             r=model_args.peft_lora_r,
             lora_alpha=model_args.peft_lora_alpha,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "embed_tokens", "lm_head"],
             bias="none",
             task_type="CAUSAL_LM"
         )

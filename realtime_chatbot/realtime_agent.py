@@ -15,7 +15,7 @@ from .utils.tokenization_helpers import decode_with_prefix_space, get_token_id
 from .dynamic_contrastive import get_contrastive_search_override
 
 class RealtimeAgent_Resources:
-    def __init__(self, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2", device=None, use_fp16=True):
+    def __init__(self, modelpath="AbrahamSanders/Llama-2-7b-realtime-chat-v2-lora", device=None, use_fp16=True, use_bf16=False):
         # Tokenizer
         use_fast = "opt-" not in modelpath
         self.tokenizer = AutoTokenizer.from_pretrained(modelpath, use_fast=use_fast)
@@ -27,6 +27,8 @@ class RealtimeAgent_Resources:
         # Model
         if use_fp16:
             self.model = AutoModelForCausalLM.from_pretrained(modelpath, torch_dtype=torch.float16)
+        elif use_bf16:
+            self.model = AutoModelForCausalLM.from_pretrained(modelpath, torch_dtype=torch.bfloat16)
         else:
             self.model = AutoModelForCausalLM.from_pretrained(modelpath)
 
@@ -544,7 +546,7 @@ class RealtimeAgent:
         return output, output_for_cache, sequence_changed
 
 class RealtimeAgentMultiprocessing:
-    def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/opt-2.7b-realtime-chat-v2",
+    def __init__(self, wait_until_running=True, config=None, modelpath="AbrahamSanders/Llama-2-7b-realtime-chat-v2-lora",
                  device=None, chain_to_input_queue=None, output_sequence=False, output_sequence_max_length=None):
         import multiprocessing as mp
         from ctypes import c_bool

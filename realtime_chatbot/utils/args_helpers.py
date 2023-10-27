@@ -2,7 +2,7 @@ import argparse
 
 def get_common_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent-modelpath", default="AbrahamSanders/opt-2.7b-realtime-chat-v2", 
+    parser.add_argument("--agent-modelpath", default="AbrahamSanders/Llama-2-7b-realtime-chat-v2-lora", 
                         help="Path to to the HuggingFace transformers model to use for the agent. (default: %(default)s)")
     parser.add_argument("--random-state", type=int, default=None,
                         help="Random seed for model reproducibility. (default: %(default)s)")

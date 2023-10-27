@@ -7,7 +7,7 @@ python train.py \
     --per_device_eval_batch_size=1 \
     --gradient_accumulation_steps=64 \
     --do_train \
-    --fp16 \
+    --bf16 \
     --output_dir=Llama-2-7b-realtime-chat-v2 \
     --do_eval \
     --overwrite_output_dir \
@@ -20,8 +20,7 @@ python train.py \
     --lr_scheduler_type=cosine \
     --num_train_epochs=2 \
     --save_steps=51 \
-    --learning_rate=2e-05 \
-    --weight_decay=0.1 \
+    --learning_rate=3e-05 \
     --warmup_ratio=0.03 \
     --metric_for_best_model=eval_loss \
     --load_best_model_at_end \

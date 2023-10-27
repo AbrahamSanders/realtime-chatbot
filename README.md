@@ -8,7 +8,7 @@ for specific tasks, this is a completely open-domain system intended to converse
 turn-taking rules - the agent is free to speak whenever it chooses and learns coordination behavior directly from the training data.
 
 - [Whisper](https://github.com/openai/whisper) is used for Automatic Speech Recognition (ASR).
-- [OPT 2.7b](https://huggingface.co/facebook/opt-2.7b) fine-tuned on transcribed spoken dialogue from [TalkBank](https://ca.talkbank.org/access/) is used for the dialogue agent. See the [model card](https://huggingface.co/AbrahamSanders/opt-2.7b-realtime-chat-v2) for more details.
+- [Llama-2-7b](https://huggingface.co/meta-llama/Llama-2-7b-hf) fine-tuned on transcribed spoken dialogue from [TalkBank](https://ca.talkbank.org/access/) is used for the dialogue agent. See the [model card](https://huggingface.co/AbrahamSanders/Llama-2-7b-realtime-chat-v2-lora) for more details.
 - [FastSpeech2](https://huggingface.co/facebook/fastspeech2-en-200_speaker-cv4) (trained on [Common Voice v4](https://commonvoice.mozilla.org/en/datasets)) or [Bark](https://github.com/suno-ai/bark) (trained on _yet to be published_) is used for Text to Speech (TTS).
 
 ![System architecture](images/system_architecture.png)
@@ -19,7 +19,7 @@ Python 3.8 or greater is required. If PyTorch is not already installed in your e
 the appropriate configuration of PyTorch for your environment (OS, CUDA version) before proceeding - 
 see [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/).
 
-If you wish to use Bark for TTS, the nightly PyTorch build (2.1.x) offers additional performance improvements. Otherwise, the latest stable release is recommended.
+If you wish to use Bark for TTS, PyTorch 2.1.x offers additional performance improvements.
 See the [Bark Readme](https://github.com/suno-ai/bark#%EF%B8%8F-hardware-and-inference-speed) for more details.
 
 To clone the repo and install dependencies, run:
@@ -28,6 +28,9 @@ git clone https://github.com/AbrahamSanders/realtime-chatbot.git
 cd realtime-chatbot
 pip install -r requirements.txt
 ```
+
+### Llama-2 access
+The agent model is a fine-tuned LoRA adapter for [meta-llama/Llama2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf), which requires all users to fill out an access request form before it will be available to download. Make sure you have done this and run `huggingface-cli login` before attempting to run any of the interfaces below. For more information see [https://huggingface.co/docs/hub/models-gated](https://huggingface.co/docs/hub/models-gated).
 
 ## Run Chat Interfaces
 ### Gradio Web Interface (audio + text)
@@ -45,8 +48,8 @@ Under default settings, it should run smoothly on a machine with a single 16GB G
 however you may experience larger floor transfer offsets (response latencies) on this minimal hardware configuration.
 
 If you have multiple GPUs, the system will attempt to distribute the models across devices for added performance:
-- If two GPUs are available, one will run the agent (OPT 2.7b) and the other will run Whisper and FastSpeech2 / Bark.
-- On a machine with three or more GPUs, OPT, Whisper, and FastSpeech2 / Bark will each run on their own dedicated GPU to maximize performance.
+- If two GPUs are available, one will run the agent (Llama-2-7b) and the other will run Whisper and FastSpeech2 / Bark.
+- On a machine with three or more GPUs, Llama-2, Whisper, and FastSpeech2 / Bark will each run on their own dedicated GPU to maximize performance.
 
 Audio input and output devices (microphone + speakers) are required. There is currently no built-in echo cancellation functionality,
 so for the best experience it is recommended to use:
@@ -91,9 +94,9 @@ To reproduce the results in tables 4 & 5 in the paper:
 1. Ensure `data/dataset_test.txt` exists (details on distributing this TBD due to TalkBank corpora licenses)
 2. Run the evaluation script:
 ```bash
-python run_evals.py > eval_results_all.txt
+python run_evals.py --num-examples=150 --use-bf16 > eval_results_all.txt
 ```
-This will run evaluation on all available GPUs using multiprocessing. On 4 GPUs with 48GB of memory each, this should take about ~13 hours.
+This will run evaluation on all available GPUs using multiprocessing. On 4 GPUs with 48GB of memory each, this should take about ~12-24 hours.
 On smaller GPUs, lower the `--batch-size` and `--contrastive-batch-size` as needed.
 The results from table 4 will be saved to `evals_output_ppl_all.csv` and the results from table 5 will be saved to `evals_output_pred_all_all.csv`.
 
@@ -117,7 +120,7 @@ python prep_datast.py --help
 The [train.py](train.py) script is a modified copy of [HuggingFace's run_clm.py script](https://github.com/huggingface/transformers/blob/v4.24.0/examples/pytorch/language-modeling/run_clm.py), adapted to use with line-by-line text file datasets that require 
 padding each example instead of chunking them into fixed size blocks.
 
-The provided shell script [train_large.sh](train_large.sh) is pre-configured to fine-tune `facebook/opt-2.7b` using `train.py`. 
+The provided shell script [train_large.sh](train_large.sh) is pre-configured to fine-tune a LoRA adapter for `meta-llama/Llama-2-7b-hf` using `train.py`. 
 To fine-tune a different model, simply modify this script. For example to train `facebook/opt-350m` instead, modify it as such:
 
 ```bash
@@ -125,3 +128,5 @@ python train.py \
     --model_name_or_path=facebook/opt-350m \
     ...
 ```
+
+Currently, fine-tuning has been tested with `meta-llama/Llama-2-*` and `facebook/opt-*` models.
